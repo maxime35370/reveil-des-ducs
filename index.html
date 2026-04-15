@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <title>Réveil des Ducs — Suivi Spectateur</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet"/>
+  <style>
+    :root {
+      --bg: #0a0e14;
+      --surface: #111822;
+      --surface2: #182030;
+      --border: #1e2d42;
+      --accent: #f5a623;
+      --accent2: #00d4aa;
+      --danger: #ff5f5f;
+      --text: #dce8f5;
+      --muted: #5a7a9a;
+      --seen: #1a3a28;
+      --seen-border: #00d4aa;
+      --warn-bg: #1e1a0e;
+      --warn-border: #f5a623;
+      --next-bg: #0f2820;
+      --next-border: #00d4aa;
+      --mono: 'DM Mono', monospace;
+      --display: 'Syne', sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; overflow: hidden; }
+    body {
+      font-family: var(--mono);
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+    }
+
+    /* HEADER */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+    .header-icon { font-size: 1.4rem; }
+    .header-text { flex: 1; }
+    .header-title {
+      font-family: var(--display);
+      font-size: 0.85rem;
+      font-weight: 800;
+      color: var(--accent);
+      letter-spacing: 0.01em;
+      line-height: 1;
+    }
+    .header-sub {
+      font-size: 0.65rem;
+      color: var(--muted);
+      margin-top: 2px;
+      font-family: var(--mono);
+    }
+    .pace-chip {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 4px 10px;
+      font-size: 0.7rem;
+      color: var(--accent2);
+      font-family: var(--mono);
+      white-space: nowrap;
+    }
+
+    /* TABS */
+    .tabs {
+      display: flex;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .tab {
+      flex: 1;
+      padding: 9px 0;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* TAB CONTENTS */
+    .tab-content { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+    .tab-content.active { display: flex; }
+
+    /* INFO BAR */
+    .info-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 14px;
+      font-size: 0.68rem;
+      color: var(--muted);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .info-bar b { color: var(--text); }
+
+    /* RECALIB BANNER */
+    .recalib-banner {
+      display: none;
+      margin: 8px 12px;
+      padding: 8px 12px;
+      background: var(--seen);
+      border: 1px solid var(--seen-border);
+      border-radius: 8px;
+      font-size: 0.72rem;
+      color: var(--accent2);
+      flex-shrink: 0;
+    }
+    .recalib-banner.show { display: block; }
+
+    /* POINTS LIST */
+    #points-list { flex: 1; overflow-y: auto; }
+
+    .point-item {
+      display: flex;
+      align-items: center;
+      padding: 9px 14px;
+      border-bottom: 1px solid var(--border);
+      gap: 10px;
+      position: relative;
+      transition: background 0.15s;
+    }
+    .point-item.is-seen {
+      background: transparent;
+      opacity: 0.45;
+    }
+    .point-item.is-next {
+      background: var(--next-bg);
+      border-left: 3px solid var(--next-border);
+    }
+    .point-item.is-close {
+      background: var(--warn-bg);
+      border-left: 3px solid var(--warn-border);
+    }
+
+    .km-badge {
+      font-family: var(--display);
+      font-size: 0.9rem;
+      font-weight: 800;
+      color: var(--accent);
+      min-width: 46px;
+      line-height: 1;
+    }
+    .km-badge small {
+      display: block;
+      font-family: var(--mono);
+      font-size: 0.58rem;
+      color: var(--muted);
+      font-weight: 400;
+      margin-top: 1px;
+    }
+
+    .point-center { flex: 1; }
+    .point-time {
+      font-family: var(--display);
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--text);
+      line-height: 1;
+    }
+    .point-gap {
+      font-size: 0.65rem;
+      color: var(--muted);
+      margin-top: 3px;
+    }
+    .point-actual {
+      font-size: 0.65rem;
+      color: var(--accent2);
+      margin-top: 2px;
+    }
+    .badge-court {
+      display: inline-block;
+      background: var(--accent);
+      color: var(--bg);
+      font-size: 0.58rem;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 10px;
+      font-family: var(--display);
+      vertical-align: middle;
+      margin-left: 4px;
+    }
+
+    /* VU BUTTON */
+    .btn-vu {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s, border-color 0.15s;
+      flex-shrink: 0;
+    }
+    .btn-vu:active { background: var(--border); }
+    .btn-vu.done {
+      background: var(--seen);
+      border-color: var(--seen-border);
+      color: var(--accent2);
+    }
+
+    /* LEGEND */
+    .list-legend {
+      flex-shrink: 0;
+      padding: 7px 14px;
+      font-size: 0.63rem;
+      color: var(--muted);
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+    .legend-dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 2px;
+      margin-right: 4px;
+      vertical-align: middle;
+    }
+
+    /* MAP */
+    #map { width: 100%; flex: 1; }
+
+    /* MODAL */
+    .modal-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.75);
+      z-index: 9999;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px 20px 0 0;
+      padding: 24px 20px 32px;
+      width: 100%;
+      max-width: 480px;
+    }
+    .modal-handle {
+      width: 36px; height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      margin: 0 auto 18px;
+    }
+    .modal-km {
+      font-family: var(--display);
+      font-size: 1.3rem;
+      font-weight: 800;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+    .modal-label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-bottom: 14px;
+    }
+    .modal-time-input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      font-family: var(--display);
+      font-size: 2rem;
+      font-weight: 800;
+      text-align: center;
+      padding: 14px;
+      margin-bottom: 16px;
+      -webkit-appearance: none;
+    }
+    .modal-time-input:focus { outline: none; border-color: var(--accent2); }
+    .modal-btns { display: flex; gap: 10px; }
+    .modal-btns button {
+      flex: 1; padding: 13px;
+      border-radius: 12px;
+      border: none;
+      font-family: var(--display);
+      font-size: 0.9rem;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .btn-confirm { background: var(--accent); color: var(--bg); }
+    .btn-cancel { background: var(--surface2); color: var(--muted); }
+
+    /* ARRIVEE SPECIAL */
+    .finish-row {
+      display: flex;
+      align-items: center;
+      padding: 12px 14px;
+      background: linear-gradient(90deg, rgba(245,166,35,0.08), transparent);
+      border-top: 1px solid var(--accent);
+      border-bottom: 1px solid var(--border);
+      gap: 10px;
+    }
+    .finish-row .km-badge { color: var(--accent2); }
+    .finish-row .point-time { color: var(--accent); }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-icon">🏃</div>
+  <div class="header-text">
+    <div class="header-title">RÉVEIL DES DUCS — SUIVI</div>
+    <div class="header-sub">27 juin 2026 · Départ 23h00 · Suscinio → Vannes</div>
+  </div>
+  <div class="pace-chip" id="pace-chip">9'26"/km</div>
+</header>
+
+<div class="tabs">
+  <button class="tab active" onclick="showTab('list')">📋 Passages</button>
+  <button class="tab" onclick="showTab('map')">🗺️ Carte</button>
+</div>
+
+<!-- TAB LISTE -->
+<div id="tab-list" class="tab-content active">
+  <div class="info-bar">
+    <div>Objectif <b>70 km en 11h</b> · Arrivée <b id="est-arrival">~10h00</b></div>
+    <div id="next-label" style="color:var(--accent2)"></div>
+  </div>
+  <div class="recalib-banner" id="recalib-banner"></div>
+  <div id="points-list"></div>
+  <div class="list-legend">
+    <span><span class="legend-dot" style="background:var(--next-border)"></span>Prochain spot</span>
+    <span><span class="legend-dot" style="background:var(--accent)"></span>&lt; 10 min avec précédent</span>
+    <span><span class="legend-dot" style="background:var(--muted)"></span>Passé</span>
+  </div>
+</div>
+
+<!-- TAB CARTE -->
+<div id="tab-map" class="tab-content">
+  <div id="map"></div>
+</div>
+
+<!-- MODAL -->
+<div class="modal-overlay" id="modal">
+  <div class="modal-box">
+    <div class="modal-handle"></div>
+    <div class="modal-km" id="modal-km-label">km —</div>
+    <div class="modal-label">Heure de passage réelle :</div>
+    <input type="time" class="modal-time-input" id="modal-time"/>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeModal()">Annuler</button>
+      <button class="btn-confirm" onclick="confirmVu()">✓ Confirmer</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ─── CONFIG ─────────────────────────────────────────────
+const DEPART_SEC = 23 * 3600;       // 23h00 en secondes
+const TOTAL_KM   = 70;
+const BASE_PACE  = (11 * 3600) / TOTAL_KM; // sec/km pour 11h
+
+// Points kilométriques (km, lat approx, lng approx)
+// ⚠️ Positions approximatives — déplacer les marqueurs sur la carte si besoin
+const POINTS = [
+  { km: 0,    lat: 47.5128, lng: -2.7295, label: 'Départ — Château de Suscinio' },
+  { km: 6.4,  lat: 47.4972, lng: -2.7060 },
+  { km: 7,    lat: 47.4955, lng: -2.6990 },
+  { km: 9.8,  lat: 47.5040, lng: -2.6870 },
+  { km: 12.5, lat: 47.5170, lng: -2.7150 },
+  { km: 14,   lat: 47.5255, lng: -2.7380 },
+  { km: 16.3, lat: 47.5370, lng: -2.7300 },
+  { km: 19.4, lat: 47.5510, lng: -2.7160 },
+  { km: 21,   lat: 47.5580, lng: -2.7080 },
+  { km: 22.9, lat: 47.5650, lng: -2.7030 },
+  { km: 23.9, lat: 47.5690, lng: -2.7005 },
+  { km: 26.2, lat: 47.5770, lng: -2.6990 },
+  { km: 27.6, lat: 47.5820, lng: -2.7000 },
+  { km: 29.4, lat: 47.5890, lng: -2.7020 },
+  { km: 30,   lat: 47.5908, lng: -2.7040 },
+  { km: 32,   lat: 47.5975, lng: -2.7090 },
+  { km: 33.8, lat: 47.6025, lng: -2.7130 },
+  { km: 35.7, lat: 47.6085, lng: -2.7165 },
+  { km: 37.2, lat: 47.6125, lng: -2.7190 },
+  { km: 38,   lat: 47.6150, lng: -2.7195 },
+  { km: 41,   lat: 47.6210, lng: -2.7195 },
+  { km: 43.4, lat: 47.6255, lng: -2.7210 },
+  { km: 44.6, lat: 47.6285, lng: -2.7225 },
+  { km: 45,   lat: 47.6295, lng: -2.7230 },
+  { km: 45.9, lat: 47.6315, lng: -2.7238 },
+  { km: 49,   lat: 47.6368, lng: -2.7310 },
+  { km: 51.6, lat: 47.6398, lng: -2.7398 },
+  { km: 52.6, lat: 47.6413, lng: -2.7430 },
+  { km: 54.5, lat: 47.6438, lng: -2.7472 },
+  { km: 56.8, lat: 47.6465, lng: -2.7510 },
+  { km: 59,   lat: 47.6495, lng: -2.7542 },
+  { km: 61,   lat: 47.6515, lng: -2.7560 },
+  { km: 65.8, lat: 47.6538, lng: -2.7575 },
+  { km: 70,   lat: 47.6534, lng: -2.7588, label: 'Arrivée — Port de Vannes' },
+];
+
+// ─── STATE ───────────────────────────────────────────────
+let currentPace = BASE_PACE;
+let seenPoints  = {}; // km -> actualSec
+let pendingKm   = null;
+let leafletMap  = null;
+let mapMarkers  = {};
+
+// ─── HELPERS ─────────────────────────────────────────────
+function secToHHMM(sec) {
+  const s = Math.round(sec) % 86400;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${String(h).padStart(2,'0')}h${String(m).padStart(2,'0')}`;
+}
+function timeStrToSec(str) {
+  const [h, m] = str.split(':').map(Number);
+  return h * 3600 + m * 60;
+}
+function formatPace(s) {
+  const m = Math.floor(s / 60);
+  const ss = Math.round(s % 60);
+  return `${m}'${String(ss).padStart(2,'0')}"/km`;
+}
+function estSec(km) {
+  let refKm = 0, refSec = DEPART_SEC;
+  for (const [k, v] of Object.entries(seenPoints)) {
+    const kn = parseFloat(k);
+    if (kn <= km && kn > refKm) { refKm = kn; refSec = v; }
+  }
+  return refSec + (km - refKm) * currentPace;
+}
+
+// ─── RECALIBRATION ───────────────────────────────────────
+function recalibrate() {
+  const seen = Object.entries(seenPoints)
+    .map(([k,v]) => [parseFloat(k), v])
+    .sort((a,b) => a[0]-b[0]);
+  if (!seen.length) { currentPace = BASE_PACE; return; }
+  const [lastKm, lastSec] = seen[seen.length - 1];
+  currentPace = (lastSec - DEPART_SEC) / lastKm;
+
+  const finishSec = DEPART_SEC + currentPace * TOTAL_KM;
+  const banner = document.getElementById('recalib-banner');
+  banner.innerHTML = `⚡ Rythme recalibré : <strong>${formatPace(currentPace)}</strong> &mdash; Arrivée estimée : <strong>${secToHHMM(finishSec)}</strong>`;
+  banner.classList.add('show');
+  document.getElementById('est-arrival').textContent = `~${secToHHMM(finishSec)}`;
+  document.getElementById('pace-chip').textContent = formatPace(currentPace);
+}
+
+// ─── RENDER LIST ─────────────────────────────────────────
+function renderList() {
+  const container = document.getElementById('points-list');
+  container.innerHTML = '';
+
+  const viewPoints = POINTS.filter(p => p.km > 0 && p.km < 70);
+  const nextKm = viewPoints.find(p => !seenPoints[p.km])?.km;
+
+  viewPoints.forEach((point, idx) => {
+    const prev   = idx > 0 ? viewPoints[idx - 1] : POINTS[0];
+    const isSeen = !!seenPoints[point.km];
+    const isNext = point.km === nextKm;
+    const gapMin = Math.round((point.km - prev.km) * currentPace / 60);
+    const isClose = gapMin < 10 && !isSeen;
+
+    const div = document.createElement('div');
+    div.className = `point-item${isSeen ? ' is-seen' : ''}${isNext ? ' is-next' : ''}${isClose && !isNext ? ' is-close' : ''}`;
+    div.id = `pt-${point.km}`;
+
+    const courtBadge = isClose ? `<span class="badge-court">COURT</span>` : '';
+    const actualLine = isSeen
+      ? `<div class="point-actual">✓ Vu à ${secToHHMM(seenPoints[point.km])}</div>`
+      : '';
+
+    div.innerHTML = `
+      <div class="km-badge">km ${point.km}<small>${isNext ? '← PROCHAIN' : ''}</small></div>
+      <div class="point-center">
+        <div class="point-time">${secToHHMM(estSec(point.km))}</div>
+        <div class="point-gap">+${gapMin} min depuis km ${prev.km}${courtBadge}</div>
+        ${actualLine}
+      </div>
+      <button class="btn-vu${isSeen ? ' done' : ''}" onclick="openModal(${point.km})">
+        ${isSeen ? '✓ Vu' : '🙋 Vu !'}
+      </button>
+    `;
+    container.appendChild(div);
+  });
+
+  // Arrivée
+  const finDiv = document.createElement('div');
+  finDiv.className = 'finish-row';
+  finDiv.innerHTML = `
+    <div class="km-badge" style="color:var(--accent2)">🏁<small>ARRIVÉE</small></div>
+    <div class="point-center">
+      <div class="point-time">${secToHHMM(estSec(70))}</div>
+      <div class="point-gap">Port de Vannes</div>
+    </div>
+  `;
+  container.appendChild(finDiv);
+
+  // Next label
+  document.getElementById('next-label').textContent =
+    nextKm ? `Prochain → km ${nextKm}` : '🎉 Course terminée !';
+
+  // Auto-scroll to next point
+  if (nextKm) {
+    setTimeout(() => {
+      const el = document.getElementById(`pt-${nextKm}`);
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 100);
+  }
+}
+
+// ─── MODAL ───────────────────────────────────────────────
+function openModal(km) {
+  pendingKm = km;
+  document.getElementById('modal-km-label').textContent = `Passage au km ${km}`;
+  const est = estSec(km);
+  const h = Math.floor((Math.round(est) % 86400) / 3600);
+  const m = Math.floor((Math.round(est) % 3600) / 60);
+  document.getElementById('modal-time').value = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+  document.getElementById('modal').classList.add('open');
+}
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+  pendingKm = null;
+}
+function confirmVu() {
+  if (pendingKm === null) return;
+  let sec = timeStrToSec(document.getElementById('modal-time').value);
+  if (sec < DEPART_SEC - 3600) sec += 86400; // traversée minuit
+  seenPoints[pendingKm] = sec;
+  recalibrate();
+  closeModal();
+  renderList();
+  if (leafletMap) updateMapMarkers();
+}
+
+// ─── CARTE ───────────────────────────────────────────────
+function initMap() {
+  if (leafletMap) return;
+  leafletMap = L.map('map', { zoomControl: true }).setView([47.570, -2.720], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OSM',
+    maxZoom: 18
+  }).addTo(leafletMap);
+
+  // Polyligne du parcours approximatif
+  const latlngs = POINTS.map(p => [p.lat, p.lng]);
+  L.polyline(latlngs, { color: '#2a7fff', weight: 2.5, opacity: 0.45, dashArray: '6 5' }).addTo(leafletMap);
+
+  POINTS.forEach(point => {
+    const isStart  = point.km === 0;
+    const isFinish = point.km === 70;
+    const isSeen   = !!seenPoints[point.km];
+
+    const color = isStart ? '#f5a623' : isFinish ? '#00d4aa' : isSeen ? '#00d4aa' : '#3a8bff';
+    const r = (isStart || isFinish) ? 9 : 5;
+
+    const m = L.circleMarker([point.lat, point.lng], {
+      radius: r, fillColor: color, color: '#fff', weight: 2, fillOpacity: 0.9
+    }).addTo(leafletMap);
+
+    const label = point.label || `km ${point.km} · ${secToHHMM(estSec(point.km))}`;
+    m.bindPopup(`<strong>${label}</strong>${!isStart ? '<br><span style="color:#888">Pos. approx.</span>' : ''}`);
+    mapMarkers[point.km] = m;
+  });
+}
+
+function updateMapMarkers() {
+  Object.entries(mapMarkers).forEach(([km, m]) => {
+    const kn = parseFloat(km);
+    const isSeen = !!seenPoints[kn];
+    const isStart = kn === 0;
+    const isFinish = kn === 70;
+    const color = isStart ? '#f5a623' : isFinish ? '#00d4aa' : isSeen ? '#00d4aa' : '#3a8bff';
+    m.setStyle({ fillColor: color });
+  });
+}
+
+// ─── TABS ────────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', i === (name==='list'?0:1)));
+  document.querySelectorAll('.tab-content').forEach(el => {
+    el.classList.remove('active');
+    el.style.display = 'none';
+  });
+  const el = document.getElementById(`tab-${name}`);
+  el.style.display = 'flex';
+  el.classList.add('active');
+  if (name === 'map') {
+    initMap();
+    setTimeout(() => leafletMap?.invalidateSize(), 150);
+  }
+}
+
+// ─── INIT ────────────────────────────────────────────────
+renderList();
+</script>
+</body>
+</html>
