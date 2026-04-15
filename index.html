@@ -494,7 +494,9 @@ const POINTS = [
 
 // ─── POSITIONS PERSONNALISÉES (localStorage + URL) ───────
 // Les positions déplacées à la main sont conservées entre les rafraîchissements.
-const POINTS_STORAGE_KEY = 'reveil-des-ducs:point-positions:v1';
+// v2 : reset automatique après intégration du tracé GPX réel (les anciens
+// overrides v1 étaient relatifs aux positions approximatives d'avant GPX).
+const POINTS_STORAGE_KEY = 'reveil-des-ducs:point-positions:v2';
 
 function readOverrides() {
   try {
@@ -565,7 +567,81 @@ function importOverridesFromHash() {
 }
 
 importOverridesFromHash();
-loadPointOverrides();
+
+// ─── TRACE GPX (parcours réel) ───────────────────────────
+const GPX_URL = 'l-ultra-marin-2026-reveil-des-ducs.gpx';
+let trace = [];          // [{lat, lng, ele, cumKm}]
+let traceTotalKm = 0;
+
+function haversineMeters(a, b) {
+  const R = 6371000;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const la1 = toRad(a.lat), la2 = toRad(b.lat);
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+
+async function loadGpxTrace() {
+  try {
+    const res = await fetch(GPX_URL, { cache: 'force-cache' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const text = await res.text();
+    const doc = new DOMParser().parseFromString(text, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) throw new Error('GPX XML invalide');
+    const trkpts = doc.getElementsByTagName('trkpt');
+    const pts = [];
+    let cumM = 0;
+    for (let i = 0; i < trkpts.length; i++) {
+      const t = trkpts[i];
+      const lat = parseFloat(t.getAttribute('lat'));
+      const lng = parseFloat(t.getAttribute('lon'));
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      const eleEl = t.getElementsByTagName('ele')[0];
+      const ele = eleEl ? parseFloat(eleEl.textContent) : null;
+      if (pts.length) cumM += haversineMeters(pts[pts.length - 1], { lat, lng });
+      pts.push({ lat, lng, ele, cumKm: cumM / 1000 });
+    }
+    trace = pts;
+    traceTotalKm = pts.length ? pts[pts.length - 1].cumKm : 0;
+    return true;
+  } catch (e) {
+    console.warn('Trace GPX non chargée :', e);
+    trace = [];
+    traceTotalKm = 0;
+    return false;
+  }
+}
+
+// Renvoie la position (lat/lng) sur la trace GPX au kilométrage `km`.
+function pointAtKm(km) {
+  if (!trace.length) return null;
+  if (km <= trace[0].cumKm) return { lat: trace[0].lat, lng: trace[0].lng };
+  if (km >= traceTotalKm) return { lat: trace[trace.length - 1].lat, lng: trace[trace.length - 1].lng };
+  let lo = 0, hi = trace.length - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >> 1;
+    if (trace[mid].cumKm < km) lo = mid; else hi = mid;
+  }
+  const a = trace[lo], b = trace[hi];
+  const span = b.cumKm - a.cumKm;
+  const t = span > 0 ? (km - a.cumKm) / span : 0;
+  return { lat: a.lat + (b.lat - a.lat) * t, lng: a.lng + (b.lng - a.lng) * t };
+}
+
+// Repositionne les POINTS par défaut sur la trace réelle à leur km exact.
+// Les overrides localStorage seront appliqués ensuite et restent prioritaires.
+function snapPointsToTrace() {
+  if (!trace.length) return;
+  POINTS.forEach(p => {
+    const pos = pointAtKm(p.km);
+    if (pos) {
+      p.lat = pos.lat;
+      p.lng = pos.lng;
+    }
+  });
+}
 
 // ─── STATE ───────────────────────────────────────────────
 let currentPace = BASE_PACE;
@@ -714,9 +790,14 @@ function initMap() {
     maxZoom: 18
   }).addTo(leafletMap);
 
-  // Polyligne du parcours approximatif
-  const latlngs = POINTS.map(p => [p.lat, p.lng]);
-  mapPolyline = L.polyline(latlngs, { color: '#2a7fff', weight: 2.5, opacity: 0.45, dashArray: '6 5' }).addTo(leafletMap);
+  // Polyligne du parcours : trace GPX réelle si dispo, sinon segments approximatifs
+  if (trace.length) {
+    const traceLL = trace.map(p => [p.lat, p.lng]);
+    mapPolyline = L.polyline(traceLL, { color: '#2a7fff', weight: 3, opacity: 0.8 }).addTo(leafletMap);
+  } else {
+    const latlngs = POINTS.map(p => [p.lat, p.lng]);
+    mapPolyline = L.polyline(latlngs, { color: '#2a7fff', weight: 2.5, opacity: 0.45, dashArray: '6 5' }).addTo(leafletMap);
+  }
 
   POINTS.forEach(point => {
     const m = L.marker([point.lat, point.lng], {
@@ -732,7 +813,9 @@ function initMap() {
       point.lat = ll.lat;
       point.lng = ll.lng;
       savePointOverride(point.km, ll.lat, ll.lng);
-      if (mapPolyline) {
+      // On ne met plus à jour la polyligne : elle représente le parcours réel
+      // (GPX), pas les positions des spectateurs.
+      if (!trace.length && mapPolyline) {
         mapPolyline.setLatLngs(POINTS.map(p => [p.lat, p.lng]));
       }
     });
@@ -872,7 +955,13 @@ function showTab(name) {
 }
 
 // ─── INIT ────────────────────────────────────────────────
-renderList();
+async function bootstrap() {
+  await loadGpxTrace();
+  snapPointsToTrace();         // positions par défaut exactes (depuis le GPX)
+  loadPointOverrides();        // overrides utilisateur prioritaires
+  renderList();
+}
+bootstrap();
 </script>
 </body>
 </html>
