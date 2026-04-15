@@ -403,6 +403,23 @@
     .point-popup .pp-sv  { background: #1a73e8; color: #fff; }
     .point-popup .pp-sat { background: #5f6368; color: #fff; }
     .point-popup .pp-gm  { background: #34a853; color: #fff; }
+    .point-popup .pp-delete {
+      background: #c0392b; color: #fff; border: 0;
+      font-family: inherit; font-size: inherit; cursor: pointer;
+    }
+    /* Marqueur custom (live timing) — pastille orange pulsante */
+    .reveil-custom-icon .custom-pt-dot {
+      border-radius: 50%;
+      background: #ff9400;
+      border: 2px solid #fff;
+      box-shadow: 0 0 0 2px rgba(255, 148, 0, 0.35), 0 0 0 6px rgba(255, 148, 0, 0.15);
+      animation: custom-pulse 1.6s ease-in-out infinite;
+      box-sizing: border-box;
+    }
+    @keyframes custom-pulse {
+      0%, 100% { box-shadow: 0 0 0 2px rgba(255, 148, 0, 0.35), 0 0 0 6px rgba(255, 148, 0, 0.15); }
+      50%      { box-shadow: 0 0 0 3px rgba(255, 148, 0, 0.55), 0 0 0 10px rgba(255, 148, 0, 0.05); }
+    }
     .point-popup .pp-hint { margin-top: 6px; font-size: 0.6rem; color: #888; text-align: center; }
 
     /* MODAL */
@@ -781,7 +798,8 @@ let seenPoints  = {};          // km -> actualSec (absolu)
 let customKm    = new Set();   // km des passages ajoutés hors liste (live timing)
 let pendingKm   = null;
 let leafletMap  = null;
-let mapMarkers  = {};
+let mapMarkers  = {};         // km (checkpoint) -> marker
+let customMapMarkers = {};    // km (custom live timing) -> marker
 let mapPolyline = null;
 
 // ─── PERSISTANCE DES PASSAGES ────────────────────────────
@@ -1014,7 +1032,10 @@ function confirmCustomPassage() {
   recalibrate();
   closeCustomModal();
   renderList();
-  if (leafletMap) updateMapMarkers();
+  if (leafletMap) {
+    updateMapMarkers();
+    refreshCustomMarker(km);  // (re)crée le marqueur sur le tracé GPX
+  }
   if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
 }
 function deleteCustomPassage(km) {
@@ -1023,6 +1044,11 @@ function deleteCustomPassage(km) {
   saveSeenPoints();
   recalibrate();
   renderList();
+  if (leafletMap) {
+    removeCustomMarker(km);
+    // Ferme un popup éventuellement ouvert
+    leafletMap.closePopup();
+  }
   if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
 }
 
@@ -1212,6 +1238,69 @@ function initMap() {
 
     mapMarkers[point.km] = m;
   });
+
+  // Marqueurs des passages ad-hoc (live timing) déjà en mémoire
+  customKm.forEach(km => addCustomMarker(km));
+}
+
+// ─── MARQUEURS AD-HOC (live timing) ──────────────────────
+function buildCustomIcon() {
+  const size = 16;
+  const html = `<div class="custom-pt-dot" style="width:${size}px;height:${size}px;"></div>`;
+  return L.divIcon({
+    html,
+    className: 'reveil-custom-icon',
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+    popupAnchor: [0, -size / 2]
+  });
+}
+
+function buildCustomPopup(km) {
+  const sec = seenPoints[km];
+  if (sec == null) return '';
+  const elapsed = sec - DEPART_SEC;
+  const eh = Math.floor(elapsed / 3600);
+  const em = Math.floor((elapsed % 3600) / 60);
+  const elapsedStr = `${eh}h${String(em).padStart(2,'0')}`;
+  const avgPace = km > 0 ? elapsed / km : 0;
+  return `
+    <div class="point-popup">
+      <div class="pp-title">🕒 km ${formatKm(km)} · LIVE</div>
+      <div class="pp-coords">Passage : ${secToHHMM(sec)} (${elapsedStr} écoulé)</div>
+      <div class="pp-coords">Allure moyenne : ${formatPaceShort(avgPace)}/km</div>
+      <div class="pp-actions">
+        <button class="pp-btn pp-delete" onclick="deleteCustomPassage(${km})">🗑️ Supprimer ce passage</button>
+      </div>
+    </div>
+  `;
+}
+
+function addCustomMarker(km) {
+  if (!leafletMap) return;
+  if (customMapMarkers[km]) return;
+  const pos = (trace.length ? pointAtKm(km) : null);
+  if (!pos) return;  // pas de tracé GPX chargé : on ne peut pas placer
+  const m = L.marker([pos.lat, pos.lng], {
+    icon: buildCustomIcon(),
+    zIndexOffset: 1000,       // passe au-dessus des checkpoints
+    interactive: true
+  }).addTo(leafletMap);
+  m.bindPopup(() => buildCustomPopup(km), { minWidth: 200 });
+  customMapMarkers[km] = m;
+}
+
+function removeCustomMarker(km) {
+  const m = customMapMarkers[km];
+  if (m && leafletMap) {
+    leafletMap.removeLayer(m);
+  }
+  delete customMapMarkers[km];
+}
+
+function refreshCustomMarker(km) {
+  removeCustomMarker(km);
+  addCustomMarker(km);
 }
 
 function buildPointPopup(point) {
