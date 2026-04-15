@@ -114,6 +114,93 @@
     }
     .info-bar b { color: var(--text); }
 
+    /* LIST ACTIONS */
+    .list-actions {
+      display: flex;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .list-action-btn {
+      flex: 1;
+      padding: 8px 10px;
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      cursor: pointer;
+    }
+    .list-action-btn:active { background: var(--border); }
+    .list-action-btn.danger { color: var(--danger); border-color: #3a1f28; }
+
+    /* CHART TAB */
+    .chart-container {
+      flex: 1;
+      padding: 12px;
+      overflow: auto;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+    }
+    .chart-container svg {
+      width: 100%;
+      max-width: 820px;
+      height: auto;
+      display: block;
+    }
+    .chart-empty {
+      color: var(--muted);
+      text-align: center;
+      font-size: 0.78rem;
+      padding: 40px 24px;
+      line-height: 1.6;
+    }
+    .chart-info-bar {
+      padding: 10px 14px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.72rem;
+      color: var(--muted);
+      flex-shrink: 0;
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+    .chart-info-bar .chip { color: var(--text); }
+    .chart-info-bar .chip b { color: var(--accent); }
+    .chart-info-bar .chip.inst b { color: #ff9400; }
+    .chart-info-bar .chip.target b { color: var(--accent2); }
+
+    /* MODAL HINT */
+    .modal-hint {
+      font-size: 0.68rem;
+      color: var(--muted);
+      margin: 6px 0 0;
+      line-height: 1.4;
+    }
+
+    /* CUSTOM PASSAGE ROW */
+    .point-item.is-custom {
+      background: rgba(255, 148, 0, 0.06);
+    }
+    .point-item.is-custom .km-badge {
+      color: #ff9400;
+    }
+    .btn-delete-custom {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      padding: 6px 9px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+    .btn-delete-custom:active { background: var(--border); color: var(--danger); }
+
     /* RECALIB BANNER */
     .recalib-banner {
       display: none;
@@ -151,6 +238,12 @@
     .point-item.is-close {
       background: var(--warn-bg);
       border-left: 3px solid var(--warn-border);
+    }
+    .point-item.is-missed {
+      opacity: 0.35;
+    }
+    .point-item.is-missed .km-badge {
+      text-decoration: line-through;
     }
 
     .km-badge {
@@ -402,8 +495,9 @@
 </header>
 
 <div class="tabs">
-  <button class="tab active" onclick="showTab('list')">📋 Passages</button>
-  <button class="tab" onclick="showTab('map')">🗺️ Carte</button>
+  <button class="tab active" data-tab="list"  onclick="showTab('list')">📋 Passages</button>
+  <button class="tab"        data-tab="map"   onclick="showTab('map')">🗺️ Carte</button>
+  <button class="tab"        data-tab="chart" onclick="showTab('chart')">📈 Allure</button>
 </div>
 
 <!-- TAB LISTE -->
@@ -412,6 +506,10 @@
     <div>Objectif <b>70 km en 11h</b> · Arrivée <b id="est-arrival">~10h00</b></div>
     <div id="next-label" style="color:var(--accent2)"></div>
   </div>
+  <div class="list-actions">
+    <button type="button" class="list-action-btn" onclick="openCustomModal()">➕ Ajouter un passage (live timing)</button>
+    <button type="button" class="list-action-btn danger" onclick="clearAllSeenPoints()">🗑️ Tout effacer</button>
+  </div>
   <div class="recalib-banner" id="recalib-banner"></div>
   <div id="points-list"></div>
   <div class="list-legend">
@@ -419,6 +517,12 @@
     <span><span class="legend-dot" style="background:var(--accent)"></span>&lt; 10 min avec précédent</span>
     <span><span class="legend-dot" style="background:var(--muted)"></span>Passé</span>
   </div>
+</div>
+
+<!-- TAB ALLURE -->
+<div id="tab-chart" class="tab-content">
+  <div class="chart-info-bar" id="chart-info"></div>
+  <div id="chart" class="chart-container"></div>
 </div>
 
 <!-- TAB CARTE -->
@@ -443,6 +547,23 @@
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeModal()">Annuler</button>
       <button class="btn-confirm" onclick="confirmVu()">✓ Confirmer</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL AJOUT PASSAGE (live timing) -->
+<div class="modal-overlay" id="modal-custom">
+  <div class="modal-box">
+    <div class="modal-handle"></div>
+    <div class="modal-km">➕ Ajouter un passage</div>
+    <div class="modal-label">Kilomètre :</div>
+    <input type="number" step="0.1" min="0" class="modal-time-input" id="modal-custom-km" placeholder="ex: 10.5"/>
+    <div class="modal-label">Temps écoulé depuis le départ (HH:MM) :</div>
+    <input type="time" class="modal-time-input" id="modal-custom-elapsed" value="01:00"/>
+    <div class="modal-hint">💡 Depuis le live timing : si le coureur a mis 1h30 pour atteindre le km 10.5, entre 01:30 ici.</div>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeCustomModal()">Annuler</button>
+      <button class="btn-confirm" onclick="confirmCustomPassage()">✓ Ajouter</button>
     </div>
   </div>
 </div>
@@ -656,11 +777,52 @@ function snapPointsToTrace() {
 
 // ─── STATE ───────────────────────────────────────────────
 let currentPace = BASE_PACE;
-let seenPoints  = {}; // km -> actualSec
+let seenPoints  = {};          // km -> actualSec (absolu)
+let customKm    = new Set();   // km des passages ajoutés hors liste (live timing)
 let pendingKm   = null;
 let leafletMap  = null;
 let mapMarkers  = {};
 let mapPolyline = null;
+
+// ─── PERSISTANCE DES PASSAGES ────────────────────────────
+// Les passages cochés (checkpoint + ajoutés via live timing) survivent aux
+// rafraîchissements de la page le jour de la course.
+const SEEN_STORAGE_KEY = 'reveil-des-ducs:seen-points:v1';
+function loadSeenPoints() {
+  try {
+    const raw = localStorage.getItem(SEEN_STORAGE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (data && typeof data === 'object') {
+      seenPoints = data.seen || {};
+      customKm = new Set((data.custom || []).map(Number));
+    }
+  } catch (e) {
+    console.warn('Impossible de charger les passages sauvegardés', e);
+  }
+}
+function saveSeenPoints() {
+  try {
+    localStorage.setItem(SEEN_STORAGE_KEY, JSON.stringify({
+      seen: seenPoints,
+      custom: Array.from(customKm)
+    }));
+  } catch (e) {
+    console.warn('Impossible de sauvegarder les passages', e);
+  }
+}
+function clearAllSeenPoints() {
+  if (!Object.keys(seenPoints).length) return;
+  if (!confirm('Effacer tous les passages enregistrés ?')) return;
+  seenPoints = {};
+  customKm = new Set();
+  currentPace = BASE_PACE;
+  saveSeenPoints();
+  recalibrate();
+  renderList();
+  if (leafletMap) updateMapMarkers();
+  if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
+}
 
 // ─── HELPERS ─────────────────────────────────────────────
 function secToHHMM(sec) {
@@ -709,35 +871,59 @@ function renderList() {
   const container = document.getElementById('points-list');
   container.innerHTML = '';
 
-  const viewPoints = POINTS.filter(p => !p.start && !p.finish);
-  const nextKm = viewPoints.find(p => !seenPoints[p.km])?.km;
+  const checkpoints = POINTS.filter(p => !p.start && !p.finish);
 
-  viewPoints.forEach((point, idx) => {
-    const prev   = idx > 0 ? viewPoints[idx - 1] : POINTS[0];
-    const isSeen = !!seenPoints[point.km];
-    const isNext = point.km === nextKm;
-    const gapMin = Math.round((point.km - prev.km) * currentPace / 60);
-    const isClose = gapMin < 10 && !isSeen;
+  // Entrées ad-hoc (live timing), triées par km et fusionnées avec les checkpoints.
+  const customEntries = Array.from(customKm)
+    .map(km => ({ km, custom: true }))
+    .filter(e => seenPoints[e.km] != null);
+
+  const entries = [...checkpoints, ...customEntries].sort((a, b) => a.km - b.km);
+
+  // « Prochain » = premier checkpoint non vu ET situé après le dernier km coché.
+  const seenKmList = Object.keys(seenPoints).map(parseFloat);
+  const maxSeenKm  = seenKmList.length ? Math.max(...seenKmList) : -1;
+  const nextKm = checkpoints.find(p => p.km > maxSeenKm && !seenPoints[p.km])?.km;
+
+  entries.forEach((point, idx) => {
+    const prev     = idx > 0 ? entries[idx - 1] : POINTS[0];
+    const isCustom = !!point.custom;
+    const isSeen   = !!seenPoints[point.km];
+    const isNext   = !isCustom && point.km === nextKm;
+    const isMissed = !isCustom && !isSeen && point.km < maxSeenKm;
+    const gapMin   = Math.round((point.km - prev.km) * currentPace / 60);
+    const isClose  = gapMin < 10 && !isSeen && !isMissed && !isCustom;
 
     const div = document.createElement('div');
-    div.className = `point-item${isSeen ? ' is-seen' : ''}${isNext ? ' is-next' : ''}${isClose && !isNext ? ' is-close' : ''}`;
+    const cls = [
+      'point-item',
+      isSeen   ? 'is-seen'   : '',
+      isNext   ? 'is-next'   : '',
+      isClose  ? 'is-close'  : '',
+      isMissed ? 'is-missed' : '',
+      isCustom ? 'is-custom' : ''
+    ].filter(Boolean).join(' ');
+    div.className = cls;
     div.id = `pt-${point.km}`;
 
     const courtBadge = isClose ? `<span class="badge-court">COURT</span>` : '';
     const actualLine = isSeen
-      ? `<div class="point-actual">✓ Vu à ${secToHHMM(seenPoints[point.km])}</div>`
+      ? `<div class="point-actual">✓ ${isCustom ? 'Live timing' : 'Vu'} à ${secToHHMM(seenPoints[point.km])}</div>`
       : '';
 
+    const badgeSuffix = isNext ? '← PROCHAIN' : (isCustom ? 'LIVE' : '');
+    const actionBtn = isCustom
+      ? `<button class="btn-delete-custom" onclick="deleteCustomPassage(${point.km})" title="Supprimer ce passage">✕</button>`
+      : `<button class="btn-vu${isSeen ? ' done' : ''}" onclick="openModal(${point.km})">${isSeen ? '✓ Vu' : '🙋 Vu !'}</button>`;
+
     div.innerHTML = `
-      <div class="km-badge">km ${formatKm(point.km)}<small>${isNext ? '← PROCHAIN' : ''}</small></div>
+      <div class="km-badge">km ${formatKm(point.km)}<small>${badgeSuffix}</small></div>
       <div class="point-center">
         <div class="point-time">${secToHHMM(estSec(point.km))}</div>
         <div class="point-gap">+${gapMin} min depuis km ${formatKm(prev.km)}${courtBadge}</div>
         ${actualLine}
       </div>
-      <button class="btn-vu${isSeen ? ' done' : ''}" onclick="openModal(${point.km})">
-        ${isSeen ? '✓ Vu' : '🙋 Vu !'}
-      </button>
+      ${actionBtn}
     `;
     container.appendChild(div);
   });
@@ -748,7 +934,7 @@ function renderList() {
   finDiv.innerHTML = `
     <div class="km-badge" style="color:var(--accent2)">🏁<small>ARRIVÉE</small></div>
     <div class="point-center">
-      <div class="point-time">${secToHHMM(estSec(70))}</div>
+      <div class="point-time">${secToHHMM(estSec(TOTAL_KM))}</div>
       <div class="point-gap">Port de Vannes</div>
     </div>
   `;
@@ -756,10 +942,10 @@ function renderList() {
 
   // Next label
   document.getElementById('next-label').textContent =
-    nextKm ? `Prochain → km ${nextKm}` : '🎉 Course terminée !';
+    nextKm != null ? `Prochain → km ${formatKm(nextKm)}` : '🎉 Course terminée !';
 
   // Auto-scroll to next point
-  if (nextKm) {
+  if (nextKm != null) {
     setTimeout(() => {
       const el = document.getElementById(`pt-${nextKm}`);
       el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -786,10 +972,203 @@ function confirmVu() {
   let sec = timeStrToSec(document.getElementById('modal-time').value);
   if (sec < DEPART_SEC - 3600) sec += 86400; // traversée minuit
   seenPoints[pendingKm] = sec;
+  saveSeenPoints();
   recalibrate();
   closeModal();
   renderList();
   if (leafletMap) updateMapMarkers();
+  if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
+}
+
+// ─── PASSAGE AD-HOC (live timing) ────────────────────────
+function openCustomModal() {
+  document.getElementById('modal-custom-km').value = '';
+  document.getElementById('modal-custom-elapsed').value = '01:00';
+  document.getElementById('modal-custom').classList.add('open');
+  setTimeout(() => document.getElementById('modal-custom-km').focus(), 50);
+}
+function closeCustomModal() {
+  document.getElementById('modal-custom').classList.remove('open');
+}
+function confirmCustomPassage() {
+  const kmRaw = document.getElementById('modal-custom-km').value.trim().replace(',', '.');
+  const elapsed = document.getElementById('modal-custom-elapsed').value;
+  const km = parseFloat(kmRaw);
+  if (!Number.isFinite(km) || km <= 0 || km >= TOTAL_KM) {
+    alert(`Kilomètre invalide (doit être entre 0 et ${formatKm(TOTAL_KM)}).`);
+    return;
+  }
+  if (!elapsed) {
+    alert('Temps écoulé manquant.');
+    return;
+  }
+  const elapsedSec = timeStrToSec(elapsed);
+  if (elapsedSec <= 0) {
+    alert('Le temps écoulé doit être positif.');
+    return;
+  }
+  const absSec = DEPART_SEC + elapsedSec;
+  seenPoints[km] = absSec;
+  customKm.add(km);
+  saveSeenPoints();
+  recalibrate();
+  closeCustomModal();
+  renderList();
+  if (leafletMap) updateMapMarkers();
+  if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
+}
+function deleteCustomPassage(km) {
+  delete seenPoints[km];
+  customKm.delete(km);
+  saveSeenPoints();
+  recalibrate();
+  renderList();
+  if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
+}
+
+// ─── GRAPHIQUE D'ALLURE (SVG) ────────────────────────────
+function formatPaceShort(sec) {
+  if (!Number.isFinite(sec) || sec <= 0) return '—';
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function renderChart() {
+  const container = document.getElementById('chart');
+  const infoBar   = document.getElementById('chart-info');
+
+  const seen = Object.entries(seenPoints)
+    .map(([k, v]) => ({ km: parseFloat(k), sec: v }))
+    .filter(p => p.km > 0)
+    .sort((a, b) => a.km - b.km);
+
+  // Bandeau d'info (récap)
+  const lastSeen = seen[seen.length - 1];
+  const lastPace = lastSeen && lastSeen.km > 0 ? (lastSeen.sec - DEPART_SEC) / lastSeen.km : null;
+  infoBar.innerHTML = `
+    <span class="chip target">Objectif <b>${formatPaceShort(BASE_PACE)}/km</b></span>
+    ${lastPace ? `<span class="chip">Moyenne actuelle <b>${formatPaceShort(lastPace)}/km</b> (km ${formatKm(lastSeen.km)})</span>` : ''}
+    <span class="chip">${seen.length} passage${seen.length > 1 ? 's' : ''} enregistré${seen.length > 1 ? 's' : ''}</span>
+  `;
+
+  if (!seen.length) {
+    container.innerHTML = `<div class="chart-empty">
+      Aucun passage enregistré.<br>
+      Coche tes points dans l'onglet <strong>Passages</strong>, ou ajoute un passage depuis le <strong>live timing</strong>, et l'évolution de l'allure s'affichera ici.
+    </div>`;
+    return;
+  }
+
+  // Allure moyenne cumulée (un point par passage)
+  const avgSeries = seen.map(s => ({
+    km: s.km,
+    pace: (s.sec - DEPART_SEC) / s.km
+  }));
+
+  // Allure instantanée entre passages consécutifs (segments horizontaux)
+  const instSegments = [];
+  let prevRef = { km: 0, sec: DEPART_SEC };
+  for (const s of seen) {
+    const dKm = s.km - prevRef.km;
+    const dSec = s.sec - prevRef.sec;
+    if (dKm > 0 && dSec > 0) {
+      instSegments.push({ fromKm: prevRef.km, toKm: s.km, pace: dSec / dKm });
+    }
+    prevRef = s;
+  }
+
+  // Échelles
+  const allPaces = [BASE_PACE, ...avgSeries.map(a => a.pace), ...instSegments.map(i => i.pace)];
+  const minP = Math.min(...allPaces);
+  const maxP = Math.max(...allPaces);
+  const range = maxP - minP;
+  const padP = Math.max(30, range * 0.18);
+  const yMin = Math.max(0, minP - padP);
+  const yMax = maxP + padP;
+
+  const W = 820, H = 420;
+  const padL = 60, padR = 20, padT = 50, padB = 44;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  const xScale = km => padL + (km / TOTAL_KM) * plotW;
+  const yScale = pace => padT + (1 - (pace - yMin) / (yMax - yMin)) * plotH;
+
+  // Graduations Y (5 ticks arrondis à 30s près)
+  const yTickCount = 5;
+  const rawStep = (yMax - yMin) / (yTickCount - 1);
+  const step = Math.max(30, Math.round(rawStep / 30) * 30);
+  const firstTick = Math.ceil(yMin / step) * step;
+  const yTicks = [];
+  for (let t = firstTick; t <= yMax; t += step) yTicks.push(t);
+
+  // Graduations X (6 ticks réguliers)
+  const xTickCount = 6;
+  const xTicks = Array.from({ length: xTickCount }, (_, i) => (TOTAL_KM * i) / (xTickCount - 1));
+
+  const yGrid = yTicks.map(t => `
+    <line x1="${padL}" x2="${W - padR}" y1="${yScale(t)}" y2="${yScale(t)}" stroke="#1e2d42" stroke-dasharray="2 4"/>
+    <text x="${padL - 10}" y="${yScale(t) + 4}" text-anchor="end" fill="#5a7a9a" font-size="11" font-family="DM Mono, monospace">${formatPaceShort(t)}</text>
+  `).join('');
+
+  const xGrid = xTicks.map(t => `
+    <line x1="${xScale(t)}" x2="${xScale(t)}" y1="${padT + plotH}" y2="${padT + plotH + 5}" stroke="#5a7a9a"/>
+    <text x="${xScale(t)}" y="${padT + plotH + 20}" text-anchor="middle" fill="#5a7a9a" font-size="11" font-family="DM Mono, monospace">${formatKm(t)}</text>
+  `).join('');
+
+  const frame = `
+    <rect x="${padL}" y="${padT}" width="${plotW}" height="${plotH}" fill="#0f1620" stroke="#1e2d42"/>
+  `;
+
+  // Ligne objectif (horizontale)
+  const targetY = yScale(BASE_PACE);
+  const targetLine = targetY >= padT && targetY <= padT + plotH ? `
+    <line x1="${padL}" x2="${W - padR}" y1="${targetY}" y2="${targetY}" stroke="#00d4aa" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.8"/>
+  ` : '';
+
+  // Allure instantanée (segments horizontaux)
+  const instPaths = instSegments.map(i => `
+    <line x1="${xScale(i.fromKm)}" x2="${xScale(i.toKm)}" y1="${yScale(i.pace)}" y2="${yScale(i.pace)}" stroke="#ff9400" stroke-width="2.5" stroke-linecap="round"/>
+  `).join('');
+
+  // Allure moyenne cumulée : polyligne, ancrée à (0, BASE_PACE)
+  const avgPts = [`${xScale(0)},${yScale(BASE_PACE)}`, ...avgSeries.map(a => `${xScale(a.km)},${yScale(a.pace)}`)];
+  const avgLine = `<polyline points="${avgPts.join(' ')}" fill="none" stroke="#f5a623" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+
+  const dots = avgSeries.map(a => `
+    <circle cx="${xScale(a.km)}" cy="${yScale(a.pace)}" r="4" fill="#f5a623" stroke="#0a0e14" stroke-width="1.5"/>
+  `).join('');
+
+  const axisLabels = `
+    <text x="${padL}" y="${padT - 22}" fill="#dce8f5" font-size="12" font-weight="600" font-family="DM Mono, monospace">Allure (min/km)</text>
+    <text x="${W - padR}" y="${H - 8}" text-anchor="end" fill="#5a7a9a" font-size="11" font-family="DM Mono, monospace">km →</text>
+  `;
+
+  const legend = `
+    <g transform="translate(${padL + 10}, ${padT - 40})">
+      <line x1="0"   x2="18" y1="8" y2="8" stroke="#f5a623" stroke-width="2.5"/>
+      <text x="22"  y="11" fill="#dce8f5" font-size="10" font-family="DM Mono, monospace">Moyenne</text>
+      <line x1="100" x2="118" y1="8" y2="8" stroke="#ff9400" stroke-width="2.5"/>
+      <text x="122" y="11" fill="#dce8f5" font-size="10" font-family="DM Mono, monospace">Instantanée</text>
+      <line x1="220" x2="238" y1="8" y2="8" stroke="#00d4aa" stroke-width="1.5" stroke-dasharray="6 4"/>
+      <text x="242" y="11" fill="#dce8f5" font-size="10" font-family="DM Mono, monospace">Objectif</text>
+    </g>
+  `;
+
+  container.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+      ${frame}
+      ${yGrid}
+      ${xGrid}
+      ${targetLine}
+      ${instPaths}
+      ${avgLine}
+      ${dots}
+      ${axisLabels}
+      ${legend}
+    </svg>
+  `;
 }
 
 // ─── CARTE ───────────────────────────────────────────────
@@ -955,7 +1334,7 @@ function resetPointPositions() {
 
 // ─── TABS ────────────────────────────────────────────────
 function showTab(name) {
-  document.querySelectorAll('.tab').forEach((t,i) => t.classList.toggle('active', i === (name==='list'?0:1)));
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-content').forEach(el => {
     el.classList.remove('active');
     el.style.display = 'none';
@@ -967,6 +1346,9 @@ function showTab(name) {
     initMap();
     setTimeout(() => leafletMap?.invalidateSize(), 150);
   }
+  if (name === 'chart') {
+    renderChart();
+  }
 }
 
 // ─── INIT ────────────────────────────────────────────────
@@ -976,6 +1358,8 @@ async function bootstrap() {
   // (issues d'un repositionnement manuel sauvegardé via « Export POINTS »).
   // Pas de snap automatique sur le tracé GPX : ça écraserait le travail.
   loadPointOverrides();        // overrides utilisateur prioritaires (drag récent)
+  loadSeenPoints();            // passages enregistrés le jour de la course
+  recalibrate();
   renderList();
 }
 bootstrap();
