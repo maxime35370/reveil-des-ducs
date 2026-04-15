@@ -245,6 +245,54 @@
     /* MAP */
     #map { width: 100%; flex: 1; }
 
+    /* MAP TOOLBAR */
+    .map-toolbar {
+      display: flex;
+      gap: 6px;
+      padding: 6px 8px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+    .map-tool-btn {
+      flex: 1 1 0;
+      min-width: 0;
+      padding: 7px 6px;
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: var(--mono);
+      font-size: 0.66rem;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .map-tool-btn:active { background: var(--border); }
+    .map-tool-btn.danger { color: var(--danger); border-color: #3a1f28; }
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 32px;
+      transform: translateX(-50%) translateY(20px);
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--accent2);
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 0.75rem;
+      font-family: var(--mono);
+      z-index: 10000;
+      opacity: 0;
+      transition: opacity 0.2s, transform 0.2s;
+      pointer-events: none;
+      max-width: 86vw;
+      text-align: center;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
     /* MODAL */
     .modal-overlay {
       display: none;
@@ -356,8 +404,15 @@
 
 <!-- TAB CARTE -->
 <div id="tab-map" class="tab-content">
+  <div class="map-toolbar">
+    <button type="button" class="map-tool-btn" onclick="copyPositionsLink()">🔗 Copier lien</button>
+    <button type="button" class="map-tool-btn" onclick="copyPointsSource()">📋 Export POINTS</button>
+    <button type="button" class="map-tool-btn danger" onclick="resetPointPositions()">↺ Reset</button>
+  </div>
   <div id="map"></div>
 </div>
+
+<div class="toast" id="toast"></div>
 
 <!-- MODAL -->
 <div class="modal-overlay" id="modal">
@@ -419,35 +474,79 @@ const POINTS = [
   { km: 70,   lat: 47.6534, lng: -2.7588, label: 'Arrivée — Port de Vannes' },
 ];
 
-// ─── POSITIONS PERSONNALISÉES (localStorage) ─────────────
+// ─── POSITIONS PERSONNALISÉES (localStorage + URL) ───────
 // Les positions déplacées à la main sont conservées entre les rafraîchissements.
 const POINTS_STORAGE_KEY = 'reveil-des-ducs:point-positions:v1';
-function loadPointOverrides() {
+
+function readOverrides() {
   try {
     const raw = localStorage.getItem(POINTS_STORAGE_KEY);
-    if (!raw) return;
-    const overrides = JSON.parse(raw);
-    POINTS.forEach(p => {
-      const o = overrides[p.km];
-      if (o && typeof o.lat === 'number' && typeof o.lng === 'number') {
-        p.lat = o.lat;
-        p.lng = o.lng;
-      }
-    });
+    return raw ? JSON.parse(raw) : {};
   } catch (e) {
-    console.warn('Impossible de charger les positions sauvegardées', e);
+    return {};
   }
 }
-function savePointOverride(km, lat, lng) {
+function writeOverrides(overrides) {
   try {
-    const raw = localStorage.getItem(POINTS_STORAGE_KEY);
-    const overrides = raw ? JSON.parse(raw) : {};
-    overrides[km] = { lat, lng };
     localStorage.setItem(POINTS_STORAGE_KEY, JSON.stringify(overrides));
   } catch (e) {
-    console.warn('Impossible de sauvegarder la position', e);
+    console.warn('Impossible de sauvegarder les positions', e);
   }
 }
+function applyOverridesToPoints(overrides) {
+  POINTS.forEach(p => {
+    const o = overrides[p.km];
+    if (o && typeof o.lat === 'number' && typeof o.lng === 'number') {
+      p.lat = o.lat;
+      p.lng = o.lng;
+    }
+  });
+}
+function loadPointOverrides() {
+  applyOverridesToPoints(readOverrides());
+}
+function savePointOverride(km, lat, lng) {
+  const overrides = readOverrides();
+  overrides[km] = { lat, lng };
+  writeOverrides(overrides);
+}
+
+// Encode/décode compact (base64 URL-safe) pour le partage via lien
+function encodeOverrides(overrides) {
+  const json = JSON.stringify(overrides);
+  return btoa(unescape(encodeURIComponent(json)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function decodeOverrides(str) {
+  try {
+    const b64 = str.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
+    const json = decodeURIComponent(escape(atob(b64 + pad)));
+    return JSON.parse(json);
+  } catch (e) {
+    console.warn('Lien de positions invalide', e);
+    return null;
+  }
+}
+
+// Au chargement : si un hash #pos=... est présent, importe et enregistre
+function importOverridesFromHash() {
+  const h = window.location.hash || '';
+  const m = h.match(/[#&]pos=([^&]+)/);
+  if (!m) return false;
+  const imported = decodeOverrides(m[1]);
+  if (!imported || typeof imported !== 'object') return false;
+  const current = readOverrides();
+  Object.assign(current, imported);
+  writeOverrides(current);
+  // Nettoie le hash pour éviter les ré-imports intempestifs
+  try {
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  } catch (e) {}
+  return true;
+}
+
+importOverridesFromHash();
 loadPointOverrides();
 
 // ─── STATE ───────────────────────────────────────────────
@@ -646,6 +745,78 @@ function updateMapMarkers() {
     const m = mapMarkers[point.km];
     if (m) m.setIcon(buildPointIcon(point));
   });
+}
+
+// ─── OUTILS CARTE : partage / export / reset ────────────
+function showToast(msg, duration = 2200) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => el.classList.remove('show'), duration);
+}
+
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) {}
+  // Fallback
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function copyPositionsLink() {
+  const overrides = readOverrides();
+  if (!Object.keys(overrides).length) {
+    showToast('Aucune position déplacée à partager');
+    return;
+  }
+  const base = window.location.origin + window.location.pathname;
+  const url = base + '#pos=' + encodeOverrides(overrides);
+  const ok = await copyToClipboard(url);
+  showToast(ok ? '🔗 Lien copié — ouvre-le sur l\'autre appareil' : 'Échec de la copie');
+}
+
+async function copyPointsSource() {
+  // Génère un tableau POINTS prêt à coller dans le code source
+  const lines = POINTS.map(p => {
+    const parts = [
+      `km: ${p.km}`,
+      `lat: ${p.lat.toFixed(4)}`,
+      `lng: ${p.lng.toFixed(4)}`
+    ];
+    if (p.label) parts.push(`label: ${JSON.stringify(p.label)}`);
+    return `  { ${parts.join(', ')} },`;
+  });
+  const src = 'const POINTS = [\n' + lines.join('\n') + '\n];';
+  const ok = await copyToClipboard(src);
+  showToast(ok ? '📋 Tableau POINTS copié' : 'Échec de la copie');
+}
+
+function resetPointPositions() {
+  const overrides = readOverrides();
+  if (!Object.keys(overrides).length) {
+    showToast('Aucune position à réinitialiser');
+    return;
+  }
+  if (!confirm('Réinitialiser toutes les positions déplacées ?')) return;
+  localStorage.removeItem(POINTS_STORAGE_KEY);
+  window.location.reload();
 }
 
 // ─── TABS ────────────────────────────────────────────────
