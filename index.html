@@ -736,6 +736,9 @@ async function clearAllPassagesFirestore() {
 function startPassagesListener() {
   if (unsubPassages) unsubPassages();
   unsubPassages = passagesRef.onSnapshot(snapshot => {
+    // Snapshot reçu = connecté (ou cache local si offline)
+    setSyncStatus(!snapshot.metadata.fromCache);
+
     const newSeen    = {};
     const newCustom  = new Set();
     const newAuthors = {};
@@ -760,6 +763,7 @@ function startPassagesListener() {
     if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
   }, err => {
     console.warn('Erreur listener Firestore :', err);
+    setSyncStatus(false);
   });
 }
 
@@ -792,9 +796,8 @@ async function initFirebase() {
     setSyncStatus(true);
     firestoreReady = true;
 
-    // Détecter online/offline
-    fbDb.collection('_ping').doc('probe')
-      .onSnapshot(() => setSyncStatus(true), () => setSyncStatus(false));
+    // Détecter online/offline via le listener des passages lui-même
+    // (pas de collection _ping qui nécessiterait des règles supplémentaires)
 
     // Si pas de pseudo encore, demander
     if (!myName) {
