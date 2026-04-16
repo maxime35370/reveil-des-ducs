@@ -201,6 +201,34 @@
     }
     .btn-delete-custom:active { background: var(--border); color: var(--danger); }
 
+    /* SYNC INDICATOR */
+    .sync-dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .sync-dot.online { background: #00d4aa; }
+    .sync-dot.offline { background: var(--danger); }
+    .sync-name {
+      font-size: 0.65rem;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .sync-name:hover { text-decoration: underline; }
+
+    /* AUTHOR TAG in passage list */
+    .author-tag {
+      font-size: 0.6rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #fff;
+      display: inline-block;
+      margin-top: 2px;
+    }
+
     /* RECALIB BANNER */
     .recalib-banner {
       display: none;
@@ -509,6 +537,10 @@
     <div class="header-sub">27 juin 2026 · Départ 23h00 · Suscinio → Vannes</div>
   </div>
   <div class="pace-chip" id="pace-chip">9'26"/km</div>
+  <div id="sync-status" style="display:flex;align-items:center;">
+    <span class="sync-dot" id="sync-dot"></span>
+    <span class="sync-name" id="sync-name" onclick="openNameModal()" title="Changer de pseudo"></span>
+  </div>
 </header>
 
 <div class="tabs">
@@ -585,8 +617,201 @@
   </div>
 </div>
 
+<!-- MODAL NOM (premier lancement) -->
+<div class="modal-overlay" id="modal-name">
+  <div class="modal-box">
+    <div class="modal-handle"></div>
+    <div class="modal-km">👋 Bienvenue</div>
+    <div class="modal-label">Ton prénom ou pseudo :</div>
+    <input type="text" class="modal-time-input" id="name-input" placeholder="ex: Max" maxlength="20"/>
+    <div class="modal-hint">Visible par les autres spectateurs pour savoir qui a vu le coureur passer.</div>
+    <div class="modal-btns">
+      <button class="btn-confirm" onclick="confirmName()">✓ C'est parti</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<!-- Firebase SDK (compat — pas besoin de build/bundler) -->
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <script>
+// ─── FIREBASE ───────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyB_AFfc8f1-uTSrvmFJK3t1qUxJu_zYNao",
+  authDomain: "trail70km.firebaseapp.com",
+  projectId: "trail70km",
+  storageBucket: "trail70km.firebasestorage.app",
+  messagingSenderId: "643607993042",
+  appId: "1:643607993042:web:d2774056206ce031ccab0b"
+};
+const fbApp  = firebase.initializeApp(firebaseConfig);
+const fbAuth = firebase.auth();
+const fbDb   = firebase.firestore();
+
+// Active le cache offline Firestore (un seul onglet à la fois)
+fbDb.enablePersistence({ synchronizeTabs: true }).catch(() => {});
+
+// Référence de la collection des passages
+const RACE_ID = 'reveil-2026';
+const passagesRef = fbDb.collection('races').doc(RACE_ID).collection('passages');
+
+// UID & pseudo spectateur
+const NAME_STORAGE_KEY = 'reveil-des-ducs:spectator-name';
+let myUid  = null;
+let myName = localStorage.getItem(NAME_STORAGE_KEY) || '';
+
+// Couleur générée à partir d'un UID (pour tags auteur)
+function uidColor(uid) {
+  let h = 0;
+  for (let i = 0; i < uid.length; i++) h = (h * 31 + uid.charCodeAt(i)) & 0xffffff;
+  return `hsl(${h % 360}, 65%, 45%)`;
+}
+
+// ─── SPECTATEUR NAME ────────────────────────────────────
+function openNameModal() {
+  document.getElementById('name-input').value = myName;
+  document.getElementById('modal-name').classList.add('open');
+  setTimeout(() => document.getElementById('name-input').focus(), 50);
+}
+function confirmName() {
+  const n = document.getElementById('name-input').value.trim();
+  if (!n) return;
+  myName = n;
+  localStorage.setItem(NAME_STORAGE_KEY, myName);
+  document.getElementById('modal-name').classList.remove('open');
+  document.getElementById('sync-name').textContent = myName;
+}
+
+// ─── FIRESTORE SYNC ─────────────────────────────────────
+let passageAuthors = {};  // km -> { name, uid }
+let firestoreReady = false;
+let unsubPassages  = null;
+
+// Écriture d'un passage dans Firestore (addDoc si nouveau, setDoc si existant).
+// On utilise le km arrondi à 3 décimales comme clé de doc pour éviter les doublons.
+function docIdForKm(km) { return String(km).replace('.', '_'); }
+
+async function writePassageToFirestore(km, sec, isCustom) {
+  if (!firestoreReady || !myUid) return;
+  try {
+    await passagesRef.doc(docIdForKm(km)).set({
+      km,
+      sec,
+      custom: !!isCustom,
+      author: myUid,
+      authorName: myName || 'Anonyme',
+      ts: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+  } catch (e) {
+    console.warn('Erreur écriture Firestore :', e);
+  }
+}
+
+async function deletePassageFromFirestore(km) {
+  if (!firestoreReady || !myUid) return;
+  try {
+    await passagesRef.doc(docIdForKm(km)).delete();
+  } catch (e) {
+    console.warn('Erreur suppression Firestore :', e);
+  }
+}
+
+async function clearAllPassagesFirestore() {
+  if (!firestoreReady || !myUid) return;
+  try {
+    const snap = await passagesRef.get();
+    const batch = fbDb.batch();
+    snap.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+  } catch (e) {
+    console.warn('Erreur suppression totale Firestore :', e);
+  }
+}
+
+// Listener temps réel : reconstruit seenPoints/customKm à chaque changement
+// depuis n'importe quel appareil connecté.
+function startPassagesListener() {
+  if (unsubPassages) unsubPassages();
+  unsubPassages = passagesRef.onSnapshot(snapshot => {
+    const newSeen    = {};
+    const newCustom  = new Set();
+    const newAuthors = {};
+
+    snapshot.forEach(doc => {
+      const d = doc.data();
+      if (d.km == null || d.sec == null) return;
+      newSeen[d.km]    = d.sec;
+      newAuthors[d.km]  = { name: d.authorName || '?', uid: d.author || '' };
+      if (d.custom) newCustom.add(d.km);
+    });
+
+    seenPoints     = newSeen;
+    customKm       = newCustom;
+    passageAuthors = newAuthors;
+
+    saveSeenPoints();  // cache local offline
+    recalibrate();
+    renderList();
+    if (leafletMap) updateMapMarkers();
+    refreshAllCustomMarkers();
+    if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
+  }, err => {
+    console.warn('Erreur listener Firestore :', err);
+  });
+}
+
+// Synchronise les marqueurs custom de la carte avec customKm
+function refreshAllCustomMarkers() {
+  if (!leafletMap) return;
+  // Supprimer les marqueurs devenus obsolètes
+  Object.keys(customMapMarkers).forEach(km => {
+    if (!customKm.has(parseFloat(km))) removeCustomMarker(parseFloat(km));
+  });
+  // Ajouter les nouveaux
+  customKm.forEach(km => {
+    if (!customMapMarkers[km]) addCustomMarker(km);
+  });
+}
+
+// Indicateur de connexion
+function setSyncStatus(online) {
+  const dot = document.getElementById('sync-dot');
+  if (!dot) return;
+  dot.className = 'sync-dot ' + (online ? 'online' : 'offline');
+  dot.title = online ? 'Connecté — sync temps réel' : 'Hors-ligne — mode local';
+}
+
+async function initFirebase() {
+  try {
+    // Auth anonyme
+    const cred = await fbAuth.signInAnonymously();
+    myUid = cred.user.uid;
+    setSyncStatus(true);
+    firestoreReady = true;
+
+    // Détecter online/offline
+    fbDb.collection('_ping').doc('probe')
+      .onSnapshot(() => setSyncStatus(true), () => setSyncStatus(false));
+
+    // Si pas de pseudo encore, demander
+    if (!myName) {
+      openNameModal();
+    } else {
+      document.getElementById('sync-name').textContent = myName;
+    }
+
+    // Démarrer le listener temps réel
+    startPassagesListener();
+  } catch (e) {
+    console.warn('Firebase init échouée, mode local uniquement :', e);
+    setSyncStatus(false);
+    firestoreReady = false;
+  }
+}
+
 // ─── CONFIG ─────────────────────────────────────────────
 const DEPART_SEC = 23 * 3600;       // 23h00 en secondes
 
@@ -831,11 +1056,13 @@ function saveSeenPoints() {
 }
 function clearAllSeenPoints() {
   if (!Object.keys(seenPoints).length) return;
-  if (!confirm('Effacer tous les passages enregistrés ?')) return;
+  if (!confirm('Effacer tous les passages enregistrés (pour tous les spectateurs) ?')) return;
   seenPoints = {};
   customKm = new Set();
+  passageAuthors = {};
   currentPace = BASE_PACE;
   saveSeenPoints();
+  clearAllPassagesFirestore();
   recalibrate();
   renderList();
   if (leafletMap) updateMapMarkers();
@@ -925,8 +1152,12 @@ function renderList() {
     div.id = `pt-${point.km}`;
 
     const courtBadge = isClose ? `<span class="badge-court">COURT</span>` : '';
+    const author = passageAuthors[point.km];
+    const authorHtml = (isSeen && author)
+      ? `<span class="author-tag" style="background:${uidColor(author.uid)}">${author.name}</span>`
+      : '';
     const actualLine = isSeen
-      ? `<div class="point-actual">✓ ${isCustom ? 'Live timing' : 'Vu'} à ${secToHHMM(seenPoints[point.km])}</div>`
+      ? `<div class="point-actual">✓ ${isCustom ? 'Live timing' : 'Vu'} à ${secToHHMM(seenPoints[point.km])} ${authorHtml}</div>`
       : '';
 
     const badgeSuffix = isNext ? '← PROCHAIN' : (isCustom ? 'LIVE' : '');
@@ -991,6 +1222,7 @@ function confirmVu() {
   if (sec < DEPART_SEC - 3600) sec += 86400; // traversée minuit
   seenPoints[pendingKm] = sec;
   saveSeenPoints();
+  writePassageToFirestore(pendingKm, sec, false);
   recalibrate();
   closeModal();
   renderList();
@@ -1029,6 +1261,7 @@ function confirmCustomPassage() {
   seenPoints[km] = absSec;
   customKm.add(km);
   saveSeenPoints();
+  writePassageToFirestore(km, absSec, true);
   recalibrate();
   closeCustomModal();
   renderList();
@@ -1042,6 +1275,7 @@ function deleteCustomPassage(km) {
   delete seenPoints[km];
   customKm.delete(km);
   saveSeenPoints();
+  deletePassageFromFirestore(km);
   recalibrate();
   renderList();
   if (leafletMap) {
@@ -1443,13 +1677,15 @@ function showTab(name) {
 // ─── INIT ────────────────────────────────────────────────
 async function bootstrap() {
   await loadGpxTrace();
-  // Les positions des POINTS sont désormais figées dans le code source
-  // (issues d'un repositionnement manuel sauvegardé via « Export POINTS »).
-  // Pas de snap automatique sur le tracé GPX : ça écraserait le travail.
   loadPointOverrides();        // overrides utilisateur prioritaires (drag récent)
-  loadSeenPoints();            // passages enregistrés le jour de la course
+  loadSeenPoints();            // cache localStorage (offline fallback)
   recalibrate();
   renderList();
+
+  // Firebase : auth anonyme + listener temps réel
+  // Le listener onSnapshot reconstruira seenPoints depuis Firestore
+  // dès la connexion, et mettra à jour l'UI automatiquement.
+  await initFirebase();
 }
 bootstrap();
 </script>
