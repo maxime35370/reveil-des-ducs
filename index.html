@@ -736,6 +736,9 @@ async function clearAllPassagesFirestore() {
 function startPassagesListener() {
   if (unsubPassages) unsubPassages();
   unsubPassages = passagesRef.onSnapshot(snapshot => {
+    // Snapshot reçu = connecté (ou cache local si offline)
+    setSyncStatus(!snapshot.metadata.fromCache);
+
     const newSeen    = {};
     const newCustom  = new Set();
     const newAuthors = {};
@@ -760,6 +763,7 @@ function startPassagesListener() {
     if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
   }, err => {
     console.warn('Erreur listener Firestore :', err);
+    setSyncStatus(false);
   });
 }
 
@@ -792,9 +796,8 @@ async function initFirebase() {
     setSyncStatus(true);
     firestoreReady = true;
 
-    // Détecter online/offline
-    fbDb.collection('_ping').doc('probe')
-      .onSnapshot(() => setSyncStatus(true), () => setSyncStatus(false));
+    // Détecter online/offline via le listener des passages lui-même
+    // (pas de collection _ping qui nécessiterait des règles supplémentaires)
 
     // Si pas de pseudo encore, demander
     if (!myName) {
@@ -1161,9 +1164,19 @@ function renderList() {
       : '';
 
     const badgeSuffix = isNext ? '← PROCHAIN' : (isCustom ? 'LIVE' : '');
-    const actionBtn = isCustom
-      ? `<button class="btn-delete-custom" onclick="deleteCustomPassage(${point.km})" title="Supprimer ce passage">✕</button>`
-      : `<button class="btn-vu${isSeen ? ' done' : ''}" onclick="openModal(${point.km})">${isSeen ? '✓ Vu' : '🙋 Vu !'}</button>`;
+    const isMyPassage = author && author.uid === myUid;
+    let actionBtn;
+    if (isCustom) {
+      actionBtn = isMyPassage
+        ? `<button class="btn-delete-custom" onclick="deleteCustomPassage(${point.km})" title="Supprimer ce passage">✕</button>`
+        : '';
+    } else if (isSeen) {
+      actionBtn = isMyPassage
+        ? `<button class="btn-vu done" onclick="openModal(${point.km})">✓ Vu</button>`
+        : `<span class="btn-vu done" style="opacity:0.5;cursor:default">✓ Vu</span>`;
+    } else {
+      actionBtn = `<button class="btn-vu" onclick="openModal(${point.km})">🙋 Vu !</button>`;
+    }
 
     div.innerHTML = `
       <div class="km-badge">km ${formatKm(point.km)}<small>${badgeSuffix}</small></div>
@@ -1272,8 +1285,11 @@ function confirmCustomPassage() {
   if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
 }
 function deleteCustomPassage(km) {
+  const author = passageAuthors[km];
+  if (author && author.uid !== myUid) return;  // pas le mien → pas touche
   delete seenPoints[km];
   customKm.delete(km);
+  delete passageAuthors[km];
   saveSeenPoints();
   deletePassageFromFirestore(km);
   recalibrate();
@@ -1498,14 +1514,16 @@ function buildCustomPopup(km) {
   const em = Math.floor((elapsed % 3600) / 60);
   const elapsedStr = `${eh}h${String(em).padStart(2,'0')}`;
   const avgPace = km > 0 ? elapsed / km : 0;
+  const author = passageAuthors[km];
+  const authorLabel = author ? author.name : '';
+  const canDelete = author && author.uid === myUid;
   return `
     <div class="point-popup">
       <div class="pp-title">🕒 km ${formatKm(km)} · LIVE</div>
       <div class="pp-coords">Passage : ${secToHHMM(sec)} (${elapsedStr} écoulé)</div>
       <div class="pp-coords">Allure moyenne : ${formatPaceShort(avgPace)}/km</div>
-      <div class="pp-actions">
-        <button class="pp-btn pp-delete" onclick="deleteCustomPassage(${km})">🗑️ Supprimer ce passage</button>
-      </div>
+      ${authorLabel ? `<div class="pp-coords">Ajouté par : ${authorLabel}</div>` : ''}
+      ${canDelete ? `<div class="pp-actions"><button class="pp-btn pp-delete" onclick="deleteCustomPassage(${km})">🗑️ Supprimer</button></div>` : ''}
     </div>
   `;
 }
