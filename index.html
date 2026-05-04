@@ -467,6 +467,8 @@
       padding: 24px 20px 32px;
       width: 100%;
       max-width: 480px;
+      max-height: 90vh;
+      overflow-y: auto;
     }
     .modal-handle {
       width: 36px; height: 4px;
@@ -514,6 +516,51 @@
     .btn-confirm { background: var(--accent); color: var(--bg); }
     .btn-cancel { background: var(--surface2); color: var(--muted); }
 
+    /* PAUSE ROW */
+    .pause-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 14px;
+      background: rgba(122, 102, 255, 0.06);
+      border-bottom: 1px solid var(--border);
+      border-left: 3px solid #7a66ff;
+      font-size: 0.7rem;
+    }
+    .pause-row .pause-icon {
+      font-size: 1rem;
+      min-width: 22px;
+      text-align: center;
+    }
+    .pause-row .pause-body { flex: 1; line-height: 1.4; }
+    .pause-row .pause-title {
+      color: #b9a8ff;
+      font-weight: 600;
+    }
+    .pause-row .pause-meta {
+      color: var(--muted);
+      font-size: 0.62rem;
+      margin-top: 2px;
+    }
+    .pause-row .pause-author {
+      font-size: 0.6rem;
+      padding: 1px 6px;
+      border-radius: 4px;
+      color: #fff;
+      display: inline-block;
+      margin-left: 4px;
+    }
+    .btn-delete-pause {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      padding: 5px 9px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.75rem;
+    }
+    .btn-delete-pause:active { background: var(--border); color: var(--danger); }
+
     /* ARRIVEE SPECIAL */
     .finish-row {
       display: flex;
@@ -556,8 +603,9 @@
     <div id="next-label" style="color:var(--accent2)"></div>
   </div>
   <div class="list-actions">
-    <button type="button" class="list-action-btn" onclick="openCustomModal()">➕ Ajouter un passage (live timing)</button>
-    <button type="button" class="list-action-btn danger" onclick="clearAllSeenPoints()">🗑️ Tout effacer</button>
+    <button type="button" class="list-action-btn" onclick="openCustomModal()">➕ Passage (live)</button>
+    <button type="button" class="list-action-btn" onclick="openPauseModal()">⏸️ Pause ravito</button>
+    <button type="button" class="list-action-btn danger" onclick="clearAllSeenPoints()" title="Effacer tous les passages et pauses">🗑️</button>
   </div>
   <div class="recalib-banner" id="recalib-banner"></div>
   <div id="points-list"></div>
@@ -617,6 +665,25 @@
   </div>
 </div>
 
+<!-- MODAL PAUSE RAVITO -->
+<div class="modal-overlay" id="modal-pause">
+  <div class="modal-box">
+    <div class="modal-handle"></div>
+    <div class="modal-km" id="modal-pause-title">⏸️ Pause ravito</div>
+    <div class="modal-label">Kilomètre du ravito (optionnel) :</div>
+    <input type="number" step="0.1" min="0" class="modal-time-input" id="modal-pause-km" placeholder="ex: 32"/>
+    <div class="modal-label">Heure d'arrêt (HH:MM) :</div>
+    <input type="time" class="modal-time-input" id="modal-pause-start"/>
+    <div class="modal-label">Heure de reprise (HH:MM) :</div>
+    <input type="time" class="modal-time-input" id="modal-pause-end"/>
+    <div class="modal-hint">💡 Ce temps de pause sera <strong>déduit</strong> du calcul d'allure moyenne pour ne pas fausser les estimations futures.</div>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closePauseModal()">Annuler</button>
+      <button class="btn-confirm" onclick="confirmPause()">✓ Enregistrer</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL NOM (premier lancement) -->
 <div class="modal-overlay" id="modal-name">
   <div class="modal-box">
@@ -657,6 +724,7 @@ fbDb.enablePersistence({ synchronizeTabs: true }).catch(() => {});
 // Référence de la collection des passages
 const RACE_ID = 'reveil-2026';
 const passagesRef = fbDb.collection('races').doc(RACE_ID).collection('passages');
+const pausesRef   = fbDb.collection('races').doc(RACE_ID).collection('pauses');
 
 // UID & pseudo spectateur
 const NAME_STORAGE_KEY = 'reveil-des-ducs:spectator-name';
@@ -729,6 +797,70 @@ async function clearAllPassagesFirestore() {
   } catch (e) {
     console.warn('Erreur suppression totale Firestore :', e);
   }
+}
+
+// ─── PAUSES (FIRESTORE) ─────────────────────────────────
+async function writePauseToFirestore(p) {
+  if (!firestoreReady || !myUid || !p || !p.id) return;
+  try {
+    await pausesRef.doc(p.id).set({
+      id: p.id,
+      startSec: p.startSec,
+      endSec: p.endSec,
+      km: p.km != null ? p.km : null,
+      author: myUid,
+      authorName: myName || 'Anonyme',
+      ts: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+  } catch (e) {
+    console.warn('Erreur écriture pause Firestore :', e);
+  }
+}
+async function deletePauseFromFirestore(id) {
+  if (!firestoreReady || !myUid || !id) return;
+  try {
+    await pausesRef.doc(id).delete();
+  } catch (e) {
+    console.warn('Erreur suppression pause Firestore :', e);
+  }
+}
+async function clearAllPausesFirestore() {
+  if (!firestoreReady || !myUid) return;
+  try {
+    const snap = await pausesRef.get();
+    const batch = fbDb.batch();
+    snap.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+  } catch (e) {
+    console.warn('Erreur suppression totale pauses Firestore :', e);
+  }
+}
+
+let unsubPauses = null;
+function startPausesListener() {
+  if (unsubPauses) unsubPauses();
+  unsubPauses = pausesRef.onSnapshot(snapshot => {
+    const newPauses = {};
+    snapshot.forEach(doc => {
+      const d = doc.data();
+      if (!d || !Number.isFinite(d.startSec) || !Number.isFinite(d.endSec)) return;
+      newPauses[d.id || doc.id] = {
+        id: d.id || doc.id,
+        startSec: d.startSec,
+        endSec: d.endSec,
+        km: d.km != null ? d.km : null,
+        author: d.author || null,
+        authorName: d.authorName || ''
+      };
+    });
+    pauses = newPauses;
+    savePauses();
+    recalibrate();
+    renderList();
+    if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
+  }, err => {
+    console.warn('Erreur listener pauses Firestore :', err);
+  });
 }
 
 // Listener temps réel : reconstruit seenPoints/customKm à chaque changement
@@ -808,6 +940,7 @@ async function initFirebase() {
 
     // Démarrer le listener temps réel
     startPassagesListener();
+    startPausesListener();
   } catch (e) {
     console.warn('Firebase init échouée, mode local uniquement :', e);
     setSyncStatus(false);
@@ -1024,6 +1157,7 @@ function snapPointsToTrace() {
 let currentPace = BASE_PACE;
 let seenPoints  = {};          // km -> actualSec (absolu)
 let customKm    = new Set();   // km des passages ajoutés hors liste (live timing)
+let pauses      = {};          // id -> { id, startSec, endSec, km, label, author? }
 let pendingKm   = null;
 let leafletMap  = null;
 let mapMarkers  = {};         // km (checkpoint) -> marker
@@ -1058,18 +1192,62 @@ function saveSeenPoints() {
   }
 }
 function clearAllSeenPoints() {
-  if (!Object.keys(seenPoints).length) return;
-  if (!confirm('Effacer tous les passages enregistrés (pour tous les spectateurs) ?')) return;
+  if (!Object.keys(seenPoints).length && !Object.keys(pauses).length) return;
+  if (!confirm('Effacer tous les passages et pauses enregistrés (pour tous les spectateurs) ?')) return;
   seenPoints = {};
   customKm = new Set();
   passageAuthors = {};
+  pauses = {};
   currentPace = BASE_PACE;
   saveSeenPoints();
+  savePauses();
   clearAllPassagesFirestore();
+  clearAllPausesFirestore();
   recalibrate();
   renderList();
   if (leafletMap) updateMapMarkers();
   if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
+}
+
+// ─── PERSISTANCE DES PAUSES (RAVITOS) ───────────────────
+// Les pauses (arrêt → reprise) déduisent du temps de course pour ne pas
+// fausser l'allure moyenne ni les estimations futures.
+const PAUSES_STORAGE_KEY = 'reveil-des-ducs:pauses:v1';
+function loadPauses() {
+  try {
+    const raw = localStorage.getItem(PAUSES_STORAGE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (data && typeof data === 'object') pauses = data.pauses || {};
+  } catch (e) {
+    console.warn('Impossible de charger les pauses sauvegardées', e);
+  }
+}
+function savePauses() {
+  try {
+    localStorage.setItem(PAUSES_STORAGE_KEY, JSON.stringify({ pauses }));
+  } catch (e) {
+    console.warn('Impossible de sauvegarder les pauses', e);
+  }
+}
+// Durée totale de pause (terminée ou en cours) écoulée jusqu'à `sec`.
+function pauseTimeUpTo(sec) {
+  return pauseBetween(DEPART_SEC, sec);
+}
+// Durée totale de pause superposée à l'intervalle [from, to] (sec absolus).
+function pauseBetween(fromSec, toSec) {
+  if (toSec <= fromSec) return 0;
+  let total = 0;
+  for (const p of Object.values(pauses)) {
+    if (!Number.isFinite(p.startSec) || !Number.isFinite(p.endSec)) continue;
+    if (p.endSec <= p.startSec) continue;
+    const overlap = Math.min(p.endSec, toSec) - Math.max(p.startSec, fromSec);
+    if (overlap > 0) total += overlap;
+  }
+  return total;
+}
+function pauseDurationMin(p) {
+  return Math.max(0, Math.round((p.endSec - p.startSec) / 60));
 }
 
 // ─── HELPERS ─────────────────────────────────────────────
@@ -1098,23 +1276,83 @@ function estSec(km) {
 }
 
 // ─── RECALIBRATION ───────────────────────────────────────
+// Allure « réelle de course » = (temps écoulé − pauses passées) / km parcourus.
+// La projection d'arrivée part du dernier passage et n'ajoute pas de pause
+// future (inconnue), mais conserve les pauses déjà prises dans le wall-clock.
 function recalibrate() {
   const seen = Object.entries(seenPoints)
     .map(([k,v]) => [parseFloat(k), v])
     .sort((a,b) => a[0]-b[0]);
   if (!seen.length) { currentPace = BASE_PACE; return; }
   const [lastKm, lastSec] = seen[seen.length - 1];
-  currentPace = (lastSec - DEPART_SEC) / lastKm;
+  const pausedSec = pauseTimeUpTo(lastSec);
+  const runningSec = Math.max(1, lastSec - DEPART_SEC - pausedSec);
+  currentPace = runningSec / lastKm;
 
-  const finishSec = DEPART_SEC + currentPace * TOTAL_KM;
+  const finishSec = lastSec + currentPace * (TOTAL_KM - lastKm);
   const banner = document.getElementById('recalib-banner');
-  banner.innerHTML = `⚡ Rythme recalibré : <strong>${formatPace(currentPace)}</strong> &mdash; Arrivée estimée : <strong>${secToHHMM(finishSec)}</strong>`;
+  const pauseLabel = pausedSec > 0
+    ? ` <span style="color:var(--muted)">(− ${Math.round(pausedSec/60)} min de pause)</span>`
+    : '';
+  banner.innerHTML = `⚡ Rythme recalibré : <strong>${formatPace(currentPace)}</strong>${pauseLabel} &mdash; Arrivée estimée : <strong>${secToHHMM(finishSec)}</strong>`;
   banner.classList.add('show');
   document.getElementById('est-arrival').textContent = `~${secToHHMM(finishSec)}`;
   document.getElementById('pace-chip').textContent = formatPace(currentPace);
 }
 
 // ─── RENDER LIST ─────────────────────────────────────────
+// Construit le HTML d'une ligne « pause ravito » insérée dans la liste.
+function buildPauseRowHtml(p) {
+  const kmLabel = (p.km != null && Number.isFinite(p.km))
+    ? `km ${formatKm(p.km)} · `
+    : '';
+  const dur = pauseDurationMin(p);
+  const authorHtml = p.authorName
+    ? `<span class="pause-author" style="background:${uidColor(p.author || '')}">${p.authorName}</span>`
+    : '';
+  const canDelete = !p.author || (myUid && p.author === myUid);
+  const delBtn = canDelete
+    ? `<button class="btn-delete-pause" onclick="deletePause('${p.id}')" title="Supprimer la pause">✕</button>`
+    : '';
+  return `
+    <div class="pause-icon">⏸️</div>
+    <div class="pause-body">
+      <div class="pause-title">${kmLabel}Pause ravito · ${dur} min</div>
+      <div class="pause-meta">${secToHHMM(p.startSec)} → ${secToHHMM(p.endSec)} ${authorHtml}</div>
+    </div>
+    ${delBtn}
+  `;
+}
+// Range les pauses dans des seaux : « après tel km » ou « __top » si aucune
+// passage antérieure.
+function bucketPauses(entries) {
+  const buckets = {};
+  const arr = Object.values(pauses).sort((a, b) => a.startSec - b.startSec);
+  for (const p of arr) {
+    let key = '__top';
+    if (p.km != null && entries.some(e => e.km === p.km)) {
+      key = String(p.km);
+    } else {
+      let bestSec = -Infinity, bestKm = null;
+      for (const [k, v] of Object.entries(seenPoints)) {
+        if (v <= p.startSec && v > bestSec) { bestSec = v; bestKm = parseFloat(k); }
+      }
+      if (bestKm != null) key = String(bestKm);
+    }
+    (buckets[key] = buckets[key] || []).push(p);
+  }
+  return buckets;
+}
+function appendPauseRows(container, list) {
+  if (!list || !list.length) return;
+  for (const p of list) {
+    const div = document.createElement('div');
+    div.className = 'pause-row';
+    div.innerHTML = buildPauseRowHtml(p);
+    container.appendChild(div);
+  }
+}
+
 function renderList() {
   const container = document.getElementById('points-list');
   container.innerHTML = '';
@@ -1127,6 +1365,8 @@ function renderList() {
     .filter(e => seenPoints[e.km] != null);
 
   const entries = [...checkpoints, ...customEntries].sort((a, b) => a.km - b.km);
+  const pauseBuckets = bucketPauses(entries);
+  appendPauseRows(container, pauseBuckets['__top']);
 
   // « Prochain » = premier checkpoint non vu ET situé après le dernier km coché.
   const seenKmList = Object.keys(seenPoints).map(parseFloat);
@@ -1188,6 +1428,7 @@ function renderList() {
       ${actionBtn}
     `;
     container.appendChild(div);
+    appendPauseRows(container, pauseBuckets[String(point.km)]);
   });
 
   // Arrivée
@@ -1302,6 +1543,61 @@ function deleteCustomPassage(km) {
   if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
 }
 
+// ─── PAUSES (RAVITO) ─────────────────────────────────────
+function genPauseId() {
+  return 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+// Convertit une heure HH:MM en sec absolu, en gérant la traversée de minuit
+// (départ 23h00 : si la valeur saisie est < départ − 1h, on ajoute 24h).
+function timeStrToAbsSec(str) {
+  let s = timeStrToSec(str);
+  if (s < DEPART_SEC - 3600) s += 86400;
+  return s;
+}
+function openPauseModal() {
+  document.getElementById('modal-pause-km').value = '';
+  document.getElementById('modal-pause-start').value = '';
+  document.getElementById('modal-pause-end').value = '';
+  document.getElementById('modal-pause').classList.add('open');
+  setTimeout(() => document.getElementById('modal-pause-start').focus(), 50);
+}
+function closePauseModal() {
+  document.getElementById('modal-pause').classList.remove('open');
+}
+function confirmPause() {
+  const startStr = document.getElementById('modal-pause-start').value;
+  const endStr   = document.getElementById('modal-pause-end').value;
+  const kmRaw    = document.getElementById('modal-pause-km').value.trim().replace(',', '.');
+  if (!startStr || !endStr) { alert('Heures d\'arrêt et de reprise requises.'); return; }
+  const startSec = timeStrToAbsSec(startStr);
+  let   endSec   = timeStrToAbsSec(endStr);
+  if (endSec <= startSec) endSec += 86400;
+  if (endSec - startSec > 12 * 3600) { alert('Durée de pause invalide (> 12h).'); return; }
+  const km = kmRaw === '' ? null : parseFloat(kmRaw);
+  if (kmRaw !== '' && (!Number.isFinite(km) || km < 0 || km > TOTAL_KM)) {
+    alert(`Kilomètre invalide (0 - ${formatKm(TOTAL_KM)}).`); return;
+  }
+  const id = genPauseId();
+  pauses[id] = { id, startSec, endSec, km, author: myUid || null, authorName: myName || 'Anonyme' };
+  savePauses();
+  writePauseToFirestore(pauses[id]);
+  recalibrate();
+  closePauseModal();
+  renderList();
+  if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
+}
+function deletePause(id) {
+  const p = pauses[id];
+  if (!p) return;
+  if (p.author && myUid && p.author !== myUid) return;  // pas la mienne → pas touche
+  delete pauses[id];
+  savePauses();
+  deletePauseFromFirestore(id);
+  recalibrate();
+  renderList();
+  if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
+}
+
 // ─── GRAPHIQUE D'ALLURE (SVG) ────────────────────────────
 function formatPaceShort(sec) {
   if (!Number.isFinite(sec) || sec <= 0) return '—';
@@ -1319,13 +1615,18 @@ function renderChart() {
     .filter(p => p.km > 0)
     .sort((a, b) => a.km - b.km);
 
-  // Bandeau d'info (récap)
+  // Bandeau d'info (récap) — allures hors pauses (« en course réelle »)
   const lastSeen = seen[seen.length - 1];
-  const lastPace = lastSeen && lastSeen.km > 0 ? (lastSeen.sec - DEPART_SEC) / lastSeen.km : null;
+  const lastPace = lastSeen && lastSeen.km > 0
+    ? Math.max(1, lastSeen.sec - DEPART_SEC - pauseTimeUpTo(lastSeen.sec)) / lastSeen.km
+    : null;
+  const pauseCount = Object.keys(pauses).length;
+  const totalPauseMin = Math.round(pauseTimeUpTo(lastSeen ? lastSeen.sec : DEPART_SEC) / 60);
   infoBar.innerHTML = `
     <span class="chip target">Objectif <b>${formatPaceShort(BASE_PACE)}/km</b></span>
     ${lastPace ? `<span class="chip">Moyenne actuelle <b>${formatPaceShort(lastPace)}/km</b> (km ${formatKm(lastSeen.km)})</span>` : ''}
     <span class="chip">${seen.length} passage${seen.length > 1 ? 's' : ''} enregistré${seen.length > 1 ? 's' : ''}</span>
+    ${pauseCount ? `<span class="chip">${pauseCount} pause${pauseCount > 1 ? 's' : ''} · ${totalPauseMin} min déduites</span>` : ''}
   `;
 
   if (!seen.length) {
@@ -1336,18 +1637,20 @@ function renderChart() {
     return;
   }
 
-  // Allure moyenne cumulée (un point par passage)
+  // Allure moyenne cumulée (un point par passage), hors pauses ravito
   const avgSeries = seen.map(s => ({
     km: s.km,
-    pace: (s.sec - DEPART_SEC) / s.km
+    pace: Math.max(1, s.sec - DEPART_SEC - pauseTimeUpTo(s.sec)) / s.km
   }));
 
-  // Allure instantanée entre passages consécutifs (segments horizontaux)
+  // Allure instantanée entre passages consécutifs (segments horizontaux),
+  // pauses du segment soustraites pour refléter la vitesse en course réelle.
   const instSegments = [];
   let prevRef = { km: 0, sec: DEPART_SEC };
   for (const s of seen) {
     const dKm = s.km - prevRef.km;
-    const dSec = s.sec - prevRef.sec;
+    const pausedInSeg = pauseBetween(prevRef.sec, s.sec);
+    const dSec = (s.sec - prevRef.sec) - pausedInSeg;
     if (dKm > 0 && dSec > 0) {
       instSegments.push({ fromKm: prevRef.km, toKm: s.km, pace: dSec / dKm });
     }
@@ -1697,6 +2000,7 @@ async function bootstrap() {
   await loadGpxTrace();
   loadPointOverrides();        // overrides utilisateur prioritaires (drag récent)
   loadSeenPoints();            // cache localStorage (offline fallback)
+  loadPauses();                // cache localStorage des pauses ravito
   recalibrate();
   renderList();
 
