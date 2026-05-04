@@ -877,10 +877,20 @@ function startPassagesListener() {
 
     snapshot.forEach(doc => {
       const d = doc.data();
-      if (d.km == null || d.sec == null) return;
-      newSeen[d.km]    = d.sec;
-      newAuthors[d.km]  = { name: d.authorName || '?', uid: d.author || '' };
-      if (d.custom) newCustom.add(d.km);
+      const kmNum  = (d && d.km != null) ? Number(d.km) : NaN;
+      const secNum = (d && d.sec != null) ? Number(d.sec) : NaN;
+      // Filtre les docs invalides (km/sec absents, NaN, négatifs) pour éviter
+      // que des passages corrompus polluent les calculs (ex : heure laissée
+      // vide → NaN qui se propage en « NaNhNaN »).
+      if (!d || !Number.isFinite(kmNum) || !Number.isFinite(secNum) || kmNum < 0) {
+        // Tentative best-effort de purge ; ignore l'échec si les règles
+        // Firestore l'interdisent (le filtre ci-dessus suffit à masquer le doc).
+        doc.ref.delete().catch(() => {});
+        return;
+      }
+      newSeen[kmNum]    = secNum;
+      newAuthors[kmNum]  = { name: d.authorName || '?', uid: d.author || '' };
+      if (d.custom) newCustom.add(kmNum);
     });
 
     seenPoints     = newSeen;
@@ -1174,8 +1184,13 @@ function loadSeenPoints() {
     if (!raw) return;
     const data = JSON.parse(raw);
     if (data && typeof data === 'object') {
-      seenPoints = data.seen || {};
-      customKm = new Set((data.custom || []).map(Number));
+      const cleaned = {};
+      for (const [k, v] of Object.entries(data.seen || {})) {
+        const kn = Number(k), vn = Number(v);
+        if (Number.isFinite(kn) && Number.isFinite(vn) && kn >= 0) cleaned[kn] = vn;
+      }
+      seenPoints = cleaned;
+      customKm = new Set((data.custom || []).map(Number).filter(n => Number.isFinite(n)));
     }
   } catch (e) {
     console.warn('Impossible de charger les passages sauvegardés', e);
@@ -1472,7 +1487,10 @@ function closeModal() {
 }
 function confirmVu() {
   if (pendingKm === null) return;
-  let sec = timeStrToSec(document.getElementById('modal-time').value);
+  const raw = document.getElementById('modal-time').value;
+  if (!raw) { alert('Heure de passage requise.'); return; }
+  let sec = timeStrToSec(raw);
+  if (!Number.isFinite(sec)) { alert('Heure invalide.'); return; }
   if (sec < DEPART_SEC - 3600) sec += 86400; // traversée minuit
   seenPoints[pendingKm] = sec;
   saveSeenPoints();
@@ -1507,7 +1525,7 @@ function confirmCustomPassage() {
     return;
   }
   const elapsedSec = timeStrToSec(elapsed);
-  if (elapsedSec <= 0) {
+  if (!Number.isFinite(elapsedSec) || elapsedSec <= 0) {
     alert('Le temps écoulé doit être positif.');
     return;
   }
