@@ -906,8 +906,15 @@ async function confirmLogin() {
     closeLoginModal();
     renderList();
   } catch (e) {
-    console.warn('Login échec', e);
-    setLoginError('Erreur de connexion, réessaie.');
+    console.error('Login échec', e);
+    const code = (e && (e.code || e.name)) || '';
+    if (code === 'permission-denied' || /permission/i.test(e?.message || '')) {
+      setLoginError('Règles Firestore : collection « users » non autorisée. Voir console (F12).');
+    } else if (code === 'unavailable' || /offline|network/i.test(e?.message || '')) {
+      setLoginError('Pas de connexion réseau. Réessaie une fois en ligne.');
+    } else {
+      setLoginError('Erreur : ' + (e?.message || code || 'inconnue') + '. Voir console (F12).');
+    }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '✓ Se connecter'; }
   }
