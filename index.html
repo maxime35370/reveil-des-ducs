@@ -547,6 +547,7 @@
     }
     .btn-confirm { background: var(--accent); color: var(--bg); }
     .btn-cancel { background: var(--surface2); color: var(--muted); }
+    .modal-btns .btn-delete { background: transparent; color: var(--danger); border: 1px solid var(--danger); }
 
     /* PAUSE ROW */
     .pause-row {
@@ -676,6 +677,7 @@
     <input type="time" class="modal-time-input" id="modal-time"/>
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeModal()">Annuler</button>
+      <button type="button" class="btn-delete" id="modal-delete-btn" style="display:none;" onclick="confirmDeletePassage()">🗑️ Supprimer</button>
       <button class="btn-confirm" onclick="confirmVu()">✓ Confirmer</button>
     </div>
   </div>
@@ -1747,7 +1749,7 @@ function renderList() {
     let actionBtn;
     if (isCustom) {
       actionBtn = isMyPassage
-        ? `<button class="btn-delete-custom" onclick="deleteCustomPassage(${point.km})" title="Supprimer ce passage">✕</button>`
+        ? `<button class="btn-delete-custom" onclick="deletePassage(${point.km})" title="Supprimer ce passage">✕</button>`
         : '';
     } else if (isSeen) {
       actionBtn = isMyPassage
@@ -1798,16 +1800,31 @@ function renderList() {
 // ─── MODAL ───────────────────────────────────────────────
 function openModal(km) {
   pendingKm = km;
-  document.getElementById('modal-km-label').textContent = `Passage au km ${formatKm(km)}`;
-  const est = estSec(km);
-  const h = Math.floor((Math.round(est) % 86400) / 3600);
-  const m = Math.floor((Math.round(est) % 3600) / 60);
+  const isReedit  = seenPoints[km] != null;
+  const author    = passageAuthors[km];
+  const canDelete = isReedit && canModifyAuthored(author ? { author: author.uid, authorAccount: author.account } : null);
+
+  document.getElementById('modal-km-label').textContent = isReedit
+    ? `Modifier le passage au km ${formatKm(km)}`
+    : `Passage au km ${formatKm(km)}`;
+  const baseSec = isReedit ? seenPoints[km] : estSec(km);
+  const h = Math.floor((Math.round(baseSec) % 86400) / 3600);
+  const m = Math.floor((Math.round(baseSec) % 3600) / 60);
   document.getElementById('modal-time').value = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+  const delBtn = document.getElementById('modal-delete-btn');
+  if (delBtn) delBtn.style.display = canDelete ? '' : 'none';
   document.getElementById('modal').classList.add('open');
 }
 function closeModal() {
   document.getElementById('modal').classList.remove('open');
   pendingKm = null;
+}
+function confirmDeletePassage() {
+  if (pendingKm === null) return;
+  if (!confirm(`Supprimer ton passage au km ${formatKm(pendingKm)} ?`)) return;
+  const km = pendingKm;
+  closeModal();
+  deletePassage(km);
 }
 function confirmVu() {
   if (pendingKm === null) return;
@@ -1867,9 +1884,10 @@ function confirmCustomPassage() {
   }
   if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
 }
-function deleteCustomPassage(km) {
+function deletePassage(km) {
   const author = passageAuthors[km];
   if (!canModifyAuthored(author ? { author: author.uid, authorAccount: author.account } : null)) return;
+  const wasCustom = customKm.has(km);
   delete seenPoints[km];
   customKm.delete(km);
   delete passageAuthors[km];
@@ -1878,8 +1896,8 @@ function deleteCustomPassage(km) {
   recalibrate();
   renderList();
   if (leafletMap) {
-    removeCustomMarker(km);
-    // Ferme un popup éventuellement ouvert
+    if (wasCustom) removeCustomMarker(km);
+    updateMapMarkers();              // ré-icone les checkpoints (vu/pas-vu)
     leafletMap.closePopup();
   }
   if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
@@ -2177,7 +2195,7 @@ function buildCustomPopup(km) {
       <div class="pp-coords">Passage : ${secToHHMM(sec)} (${elapsedStr} écoulé)</div>
       <div class="pp-coords">Allure moyenne : ${formatPaceShort(avgPace)}/km</div>
       ${authorLabel ? `<div class="pp-coords">Ajouté par : ${authorLabel}</div>` : ''}
-      ${canDelete ? `<div class="pp-actions"><button class="pp-btn pp-delete" onclick="deleteCustomPassage(${km})">🗑️ Supprimer</button></div>` : ''}
+      ${canDelete ? `<div class="pp-actions"><button class="pp-btn pp-delete" onclick="deletePassage(${km})">🗑️ Supprimer</button></div>` : ''}
     </div>
   `;
 }
