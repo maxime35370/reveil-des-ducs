@@ -503,6 +503,24 @@
       -webkit-appearance: none;
     }
     .modal-time-input:focus { outline: none; border-color: var(--accent2); }
+    .pace-input-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .pace-input-row .modal-time-input.pace-input {
+      margin-bottom: 0;
+      padding: 14px 6px;
+      flex: 1;
+      min-width: 0;
+    }
+    .pace-input-row .pace-sep {
+      font-family: var(--display);
+      font-weight: 800;
+      font-size: 1.4rem;
+      color: var(--muted);
+    }
     .modal-btns { display: flex; gap: 10px; }
     .modal-btns button {
       flex: 1; padding: 13px;
@@ -586,7 +604,7 @@
   <div class="pace-chip" id="pace-chip">9'26"/km</div>
   <div id="sync-status" style="display:flex;align-items:center;">
     <span class="sync-dot" id="sync-dot"></span>
-    <span class="sync-name" id="sync-name" onclick="openNameModal()" title="Changer de pseudo"></span>
+    <span class="sync-name" id="sync-name" onclick="logout()" title="Se déconnecter"></span>
   </div>
 </header>
 
@@ -599,12 +617,13 @@
 <!-- TAB LISTE -->
 <div id="tab-list" class="tab-content active">
   <div class="info-bar">
-    <div>Objectif <b>70 km en 11h</b> · Arrivée <b id="est-arrival">~10h00</b></div>
+    <div>Objectif <b id="plan-target">70 km en 11h</b> · Arrivée <b id="est-arrival">~10h00</b></div>
     <div id="next-label" style="color:var(--accent2)"></div>
   </div>
   <div class="list-actions">
     <button type="button" class="list-action-btn" onclick="openCustomModal()">➕ Passage (live)</button>
     <button type="button" class="list-action-btn" onclick="openPauseModal()">⏸️ Pause ravito</button>
+    <button type="button" class="list-action-btn" onclick="openSettingsModal()" title="Régler l'heure d'arrivée prévue et le rythme de base">⚙️ Plan</button>
     <button type="button" class="list-action-btn danger" onclick="clearAllSeenPoints()" title="Effacer tous les passages et pauses">🗑️</button>
   </div>
   <div class="recalib-banner" id="recalib-banner"></div>
@@ -684,16 +703,41 @@
   </div>
 </div>
 
-<!-- MODAL NOM (premier lancement) -->
-<div class="modal-overlay" id="modal-name">
+<!-- MODAL LOGIN (pseudo + mot de passe) -->
+<div class="modal-overlay" id="modal-login">
   <div class="modal-box">
     <div class="modal-handle"></div>
-    <div class="modal-km">👋 Bienvenue</div>
-    <div class="modal-label">Ton prénom ou pseudo :</div>
-    <input type="text" class="modal-time-input" id="name-input" placeholder="ex: Max" maxlength="20"/>
-    <div class="modal-hint">Visible par les autres spectateurs pour savoir qui a vu le coureur passer.</div>
+    <div class="modal-km">👋 Connexion</div>
+    <div class="modal-label">Pseudo :</div>
+    <input type="text" class="modal-time-input" id="login-pseudo" placeholder="ex: Max" maxlength="20" autocomplete="username"/>
+    <div class="modal-label">Mot de passe :</div>
+    <input type="password" class="modal-time-input" id="login-password" placeholder="••••" autocomplete="current-password"/>
+    <div class="login-error" id="login-error" style="display:none;color:var(--danger);font-size:0.8rem;margin:-6px 0 12px;text-align:center;"></div>
+    <div class="modal-hint">💡 Pseudo inconnu = nouveau compte créé. Ton pseudo apparaîtra sur les passages que tu valides, et toi seul pourras les supprimer.</div>
     <div class="modal-btns">
-      <button class="btn-confirm" onclick="confirmName()">✓ C'est parti</button>
+      <button class="btn-confirm" id="login-confirm-btn" onclick="confirmLogin()">✓ Se connecter</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL RÉGLAGES PRÉVISIONNEL -->
+<div class="modal-overlay" id="modal-settings">
+  <div class="modal-box">
+    <div class="modal-handle"></div>
+    <div class="modal-km">⚙️ Plan prévisionnel</div>
+    <div class="modal-label">Heure d'arrivée prévue (avec pauses) :</div>
+    <input type="time" class="modal-time-input" id="settings-arrival"/>
+    <div class="modal-label">Rythme de course (sans les pauses) :</div>
+    <div class="pace-input-row">
+      <input type="number" min="0" max="20" class="modal-time-input pace-input" id="settings-pace-min" oninput="updateSettingsSummary()"/>
+      <span class="pace-sep">'</span>
+      <input type="number" min="0" max="59" class="modal-time-input pace-input" id="settings-pace-sec" oninput="updateSettingsSummary()"/>
+      <span class="pace-sep">"/km</span>
+    </div>
+    <div class="modal-hint" id="settings-summary">⏱️ Total : —</div>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeSettingsModal()">Annuler</button>
+      <button class="btn-confirm" onclick="confirmSettings()">✓ Enregistrer</button>
     </div>
   </div>
 </div>
@@ -726,31 +770,147 @@ const RACE_ID = 'reveil-2026';
 const passagesRef = fbDb.collection('races').doc(RACE_ID).collection('passages');
 const pausesRef   = fbDb.collection('races').doc(RACE_ID).collection('pauses');
 
-// UID & pseudo spectateur
-const NAME_STORAGE_KEY = 'reveil-des-ducs:spectator-name';
-let myUid  = null;
-let myName = localStorage.getItem(NAME_STORAGE_KEY) || '';
+// UID & compte spectateur
+const NAME_STORAGE_KEY    = 'reveil-des-ducs:spectator-name';
+const ACCOUNT_STORAGE_KEY = 'reveil-des-ducs:account:v1';
+let myUid     = null;
+let myName    = localStorage.getItem(NAME_STORAGE_KEY) || '';
+let myAccount = null;            // pseudo normalisé (clé du document users)
 
-// Couleur générée à partir d'un UID (pour tags auteur)
+const usersRef = fbDb.collection('races').doc(RACE_ID).collection('users');
+
+function accountKey(pseudo) {
+  return String(pseudo || '').trim().toLowerCase();
+}
+
+// Droit d'éditer / supprimer un élément (passage ou pause).
+// - Sans `author` ni `authorAccount` => élément libre (legacy, suppression libre)
+// - Avec `authorAccount: true`        => réservé au pseudo correspondant
+// - Sinon (ancien UID anonyme)        => libre (modèle confiance pour anciens)
+function canModifyAuthored(item) {
+  if (!item || !item.author) return true;
+  if (!item.authorAccount) return true;
+  return !!myAccount && item.author === myAccount;
+}
+
+// Couleur déterministe (sert pour UID anonymes ET pseudos de compte)
 function uidColor(uid) {
+  const s = String(uid || '');
   let h = 0;
-  for (let i = 0; i < uid.length; i++) h = (h * 31 + uid.charCodeAt(i)) & 0xffffff;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffffff;
   return `hsl(${h % 360}, 65%, 45%)`;
 }
 
-// ─── SPECTATEUR NAME ────────────────────────────────────
-function openNameModal() {
-  document.getElementById('name-input').value = myName;
-  document.getElementById('modal-name').classList.add('open');
-  setTimeout(() => document.getElementById('name-input').focus(), 50);
+// ─── HASH MOT DE PASSE ──────────────────────────────────
+function generateSalt() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
 }
-function confirmName() {
-  const n = document.getElementById('name-input').value.trim();
-  if (!n) return;
-  myName = n;
-  localStorage.setItem(NAME_STORAGE_KEY, myName);
-  document.getElementById('modal-name').classList.remove('open');
-  document.getElementById('sync-name').textContent = myName;
+async function hashPassword(password, salt) {
+  const data = new TextEncoder().encode(salt + ':' + password);
+  const buf  = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ─── SESSION COMPTE (localStorage) ──────────────────────
+function loadAccountFromStorage() {
+  try {
+    const raw = localStorage.getItem(ACCOUNT_STORAGE_KEY);
+    if (!raw) return;
+    const a = JSON.parse(raw);
+    if (a && typeof a.account === 'string' && typeof a.name === 'string') {
+      myAccount = a.account;
+      myName    = a.name;
+    }
+  } catch (e) { /* ignore */ }
+}
+function saveAccountToStorage() {
+  try {
+    if (myAccount && myName) {
+      localStorage.setItem(ACCOUNT_STORAGE_KEY, JSON.stringify({ account: myAccount, name: myName }));
+      localStorage.setItem(NAME_STORAGE_KEY, myName);
+    } else {
+      localStorage.removeItem(ACCOUNT_STORAGE_KEY);
+    }
+  } catch (e) { /* ignore */ }
+}
+function logout() {
+  if (!myAccount) return;
+  if (!confirm(`Se déconnecter de « ${myName} » ?`)) return;
+  myAccount = null;
+  myName    = '';
+  saveAccountToStorage();
+  document.getElementById('sync-name').textContent = '';
+  openLoginModal();
+}
+
+// ─── MODAL LOGIN (pseudo + mot de passe) ────────────────
+function openLoginModal() {
+  const pseudoIn = document.getElementById('login-pseudo');
+  const pwIn     = document.getElementById('login-password');
+  if (pseudoIn) pseudoIn.value = myName || '';
+  if (pwIn)     pwIn.value = '';
+  setLoginError('');
+  document.getElementById('modal-login').classList.add('open');
+  setTimeout(() => pseudoIn && pseudoIn.focus(), 50);
+}
+function closeLoginModal() {
+  document.getElementById('modal-login').classList.remove('open');
+}
+function setLoginError(msg) {
+  const el = document.getElementById('login-error');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.style.display = msg ? 'block' : 'none';
+}
+async function confirmLogin() {
+  const pseudoRaw = document.getElementById('login-pseudo').value.trim();
+  const password  = document.getElementById('login-password').value;
+  if (!pseudoRaw)      { setLoginError('Indique un pseudo.'); return; }
+  if (!password)       { setLoginError('Indique un mot de passe.'); return; }
+  if (!firestoreReady) { setLoginError('Connexion en cours, réessaie dans 1 s.'); return; }
+
+  const key = accountKey(pseudoRaw);
+  const btn = document.getElementById('login-confirm-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+
+  try {
+    const docRef = usersRef.doc(key);
+    const snap   = await docRef.get();
+    if (snap.exists) {
+      // Compte existant → vérifier mot de passe
+      const data = snap.data() || {};
+      const hash = await hashPassword(password, data.salt || '');
+      if (hash !== data.passwordHash) {
+        setLoginError('Mot de passe incorrect pour ce pseudo.');
+        return;
+      }
+      myAccount = key;
+      myName    = data.displayName || pseudoRaw;
+    } else {
+      // Création de compte
+      const salt = generateSalt();
+      const hash = await hashPassword(password, salt);
+      await docRef.set({
+        displayName: pseudoRaw,
+        passwordHash: hash,
+        salt,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+      myAccount = key;
+      myName    = pseudoRaw;
+    }
+    saveAccountToStorage();
+    document.getElementById('sync-name').textContent = myName;
+    closeLoginModal();
+    renderList();
+  } catch (e) {
+    console.warn('Login échec', e);
+    setLoginError('Erreur de connexion, réessaie.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✓ Se connecter'; }
+  }
 }
 
 // ─── FIRESTORE SYNC ─────────────────────────────────────
@@ -769,7 +929,8 @@ async function writePassageToFirestore(km, sec, isCustom) {
       km,
       sec,
       custom: !!isCustom,
-      author: myUid,
+      author: myAccount || myUid,
+      authorAccount: !!myAccount,
       authorName: myName || 'Anonyme',
       ts: firebase.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
@@ -808,7 +969,8 @@ async function writePauseToFirestore(p) {
       startSec: p.startSec,
       endSec: p.endSec,
       km: p.km != null ? p.km : null,
-      author: myUid,
+      author: myAccount || myUid,
+      authorAccount: !!myAccount,
       authorName: myName || 'Anonyme',
       ts: firebase.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
@@ -850,6 +1012,7 @@ function startPausesListener() {
         endSec: d.endSec,
         km: d.km != null ? d.km : null,
         author: d.author || null,
+        authorAccount: !!d.authorAccount,
         authorName: d.authorName || ''
       };
     });
@@ -889,7 +1052,7 @@ function startPassagesListener() {
         return;
       }
       newSeen[kmNum]    = secNum;
-      newAuthors[kmNum]  = { name: d.authorName || '?', uid: d.author || '' };
+      newAuthors[kmNum]  = { name: d.authorName || '?', uid: d.author || '', account: !!d.authorAccount };
       if (d.custom) newCustom.add(kmNum);
     });
 
@@ -932,7 +1095,7 @@ function setSyncStatus(online) {
 
 async function initFirebase() {
   try {
-    // Auth anonyme
+    // Auth anonyme (toujours utilisée comme socle Firestore)
     const cred = await fbAuth.signInAnonymously();
     myUid = cred.user.uid;
     setSyncStatus(true);
@@ -941,11 +1104,11 @@ async function initFirebase() {
     // Détecter online/offline via le listener des passages lui-même
     // (pas de collection _ping qui nécessiterait des règles supplémentaires)
 
-    // Si pas de pseudo encore, demander
-    if (!myName) {
-      openNameModal();
-    } else {
+    // Session compte locale chargée avant init Firestore ; sinon on demande le login
+    if (myAccount && myName) {
       document.getElementById('sync-name').textContent = myName;
+    } else {
+      openLoginModal();
     }
 
     // Démarrer le listener temps réel
@@ -1006,7 +1169,58 @@ const POINTS = [
 
 // Distance totale réelle (depuis le dernier point du parcours GPX)
 const TOTAL_KM   = POINTS[POINTS.length - 1].km;
-const BASE_PACE  = (11 * 3600) / TOTAL_KM; // sec/km pour 11h
+
+// ─── PLAN PRÉVISIONNEL (réglable) ────────────────────────
+// BASE_PACE : rythme de course pur (sec/km), hors pauses.
+// plannedArrivalSec : heure d'arrivée prévue absolue (s depuis minuit),
+// englobant pauses + temps de course. Si < DEPART_SEC, on suppose le
+// lendemain (offset +24h).
+const PLAN_STORAGE_KEY = 'reveil-des-ducs:plan:v1';
+const DEFAULT_PACE_SEC = (11 * 3600) / (POINTS[POINTS.length - 1].km); // ~ 9'18"/km pour 11h pile
+const DEFAULT_ARRIVAL  = (DEPART_SEC + 11 * 3600) % 86400;             // 10h00 le lendemain
+let BASE_PACE          = DEFAULT_PACE_SEC;
+let plannedArrivalSec  = DEFAULT_ARRIVAL + (DEFAULT_ARRIVAL < DEPART_SEC ? 86400 : 0);
+
+function loadPlan() {
+  try {
+    const raw = localStorage.getItem(PLAN_STORAGE_KEY);
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (p && typeof p === 'object') {
+      const pace = Number(p.paceSec);
+      if (Number.isFinite(pace) && pace >= 60 && pace <= 1800) BASE_PACE = pace;
+      if (typeof p.arrivalHHMM === 'string' && /^\d{2}:\d{2}$/.test(p.arrivalHHMM)) {
+        plannedArrivalSec = hhmmToAbsArrivalSec(p.arrivalHHMM);
+      }
+    }
+  } catch (e) {
+    console.warn('Plan illisible', e);
+  }
+}
+function savePlan() {
+  try {
+    localStorage.setItem(PLAN_STORAGE_KEY, JSON.stringify({
+      paceSec: BASE_PACE,
+      arrivalHHMM: plannedArrivalHHMM()
+    }));
+  } catch (e) {
+    console.warn('Plan non sauvegardé', e);
+  }
+}
+function hhmmToAbsArrivalSec(hhmm) {
+  const [h, m] = hhmm.split(':').map(Number);
+  let s = h * 3600 + m * 60;
+  if (s < DEPART_SEC - 3600) s += 86400; // arrivée le lendemain
+  return s;
+}
+function plannedArrivalHHMM() {
+  const t = plannedArrivalSec % 86400;
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+function plannedTotalSec()  { return plannedArrivalSec - DEPART_SEC; }
+function plannedPauseSec()  { return plannedTotalSec() - BASE_PACE * TOTAL_KM; }
 
 function formatKm(km) {
   return Number.isInteger(km) ? String(km) : km.toFixed(1);
@@ -1295,17 +1509,25 @@ function estSec(km) {
 // La projection d'arrivée part du dernier passage et n'ajoute pas de pause
 // future (inconnue), mais conserve les pauses déjà prises dans le wall-clock.
 function recalibrate() {
+  updatePlanDisplay();
   const seen = Object.entries(seenPoints)
     .map(([k,v]) => [parseFloat(k), v])
     .sort((a,b) => a[0]-b[0]);
-  if (!seen.length) { currentPace = BASE_PACE; return; }
+  const banner = document.getElementById('recalib-banner');
+  if (!seen.length) {
+    currentPace = BASE_PACE;
+    // Pas encore de passage : on affiche le plan prévisionnel
+    document.getElementById('est-arrival').textContent = `~${plannedArrivalHHMM().replace(':', 'h')}`;
+    document.getElementById('pace-chip').textContent = formatPace(BASE_PACE);
+    if (banner) { banner.classList.remove('show'); banner.innerHTML = ''; }
+    return;
+  }
   const [lastKm, lastSec] = seen[seen.length - 1];
   const pausedSec = pauseTimeUpTo(lastSec);
   const runningSec = Math.max(1, lastSec - DEPART_SEC - pausedSec);
   currentPace = runningSec / lastKm;
 
   const finishSec = lastSec + currentPace * (TOTAL_KM - lastKm);
-  const banner = document.getElementById('recalib-banner');
   const pauseLabel = pausedSec > 0
     ? ` <span style="color:var(--muted)">(− ${Math.round(pausedSec/60)} min de pause)</span>`
     : '';
@@ -1313,6 +1535,70 @@ function recalibrate() {
   banner.classList.add('show');
   document.getElementById('est-arrival').textContent = `~${secToHHMM(finishSec)}`;
   document.getElementById('pace-chip').textContent = formatPace(currentPace);
+}
+
+// Met à jour le libellé d'objectif (info-bar) en fonction du plan courant.
+function updatePlanDisplay() {
+  const target = document.getElementById('plan-target');
+  if (!target) return;
+  const totalSec = plannedTotalSec();
+  const totalH   = Math.floor(totalSec / 3600);
+  const totalM   = Math.floor((totalSec % 3600) / 60);
+  const totalLbl = totalM === 0 ? `${totalH}h` : `${totalH}h${String(totalM).padStart(2,'0')}`;
+  target.textContent = `${formatKm(TOTAL_KM)} km en ${totalLbl}`;
+}
+
+// ─── RÉGLAGES PLAN (modal) ───────────────────────────────
+function openSettingsModal() {
+  document.getElementById('settings-arrival').value = plannedArrivalHHMM();
+  const totalSec = Math.round(BASE_PACE);
+  document.getElementById('settings-pace-min').value = Math.floor(totalSec / 60);
+  document.getElementById('settings-pace-sec').value = totalSec % 60;
+  updateSettingsSummary();
+  document.getElementById('modal-settings').classList.add('open');
+}
+function closeSettingsModal() {
+  document.getElementById('modal-settings').classList.remove('open');
+}
+function updateSettingsSummary() {
+  const el = document.getElementById('settings-summary');
+  if (!el) return;
+  const arrival = document.getElementById('settings-arrival').value;
+  const pm = parseInt(document.getElementById('settings-pace-min').value, 10);
+  const ps = parseInt(document.getElementById('settings-pace-sec').value, 10);
+  const paceSec = (Number.isFinite(pm) ? pm : 0) * 60 + (Number.isFinite(ps) ? ps : 0);
+  if (!arrival || !/^\d{2}:\d{2}$/.test(arrival) || paceSec <= 0) {
+    el.textContent = '⏱️ Renseigne une heure d\'arrivée et un rythme.';
+    return;
+  }
+  const arrSec   = hhmmToAbsArrivalSec(arrival);
+  const totalSec = arrSec - DEPART_SEC;
+  const runSec   = paceSec * TOTAL_KM;
+  const pauseSec = totalSec - runSec;
+  const totalH = Math.floor(totalSec / 3600);
+  const totalM = Math.floor((totalSec % 3600) / 60);
+  const totalLbl = `${totalH}h${String(totalM).padStart(2,'0')}`;
+  if (pauseSec < 0) {
+    el.innerHTML = `⚠️ <span style="color:var(--danger)">Avec ce rythme, le coureur arriverait avant l'heure prévue (course pure ≈ ${Math.floor(runSec/3600)}h${String(Math.floor((runSec%3600)/60)).padStart(2,'0')}).</span>`;
+  } else {
+    const pauseMin = Math.round(pauseSec / 60);
+    el.innerHTML = `⏱️ Total <strong>${totalLbl}</strong> = course ${formatPace(paceSec)} × ${formatKm(TOTAL_KM)} km + <strong>${pauseMin} min</strong> de pauses prévues.`;
+  }
+}
+function confirmSettings() {
+  const arrival = document.getElementById('settings-arrival').value;
+  const pm = parseInt(document.getElementById('settings-pace-min').value, 10);
+  const ps = parseInt(document.getElementById('settings-pace-sec').value, 10);
+  if (!arrival || !/^\d{2}:\d{2}$/.test(arrival)) { alert('Heure d\'arrivée invalide.'); return; }
+  const paceSec = (Number.isFinite(pm) ? pm : 0) * 60 + (Number.isFinite(ps) ? ps : 0);
+  if (paceSec < 60 || paceSec > 1800) { alert('Rythme invalide (1\'00" à 30\'00" /km).'); return; }
+  BASE_PACE         = paceSec;
+  plannedArrivalSec = hhmmToAbsArrivalSec(arrival);
+  savePlan();
+  closeSettingsModal();
+  recalibrate();
+  renderList();
+  if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
 }
 
 // ─── RENDER LIST ─────────────────────────────────────────
@@ -1325,7 +1611,7 @@ function buildPauseRowHtml(p) {
   const authorHtml = p.authorName
     ? `<span class="pause-author" style="background:${uidColor(p.author || '')}">${p.authorName}</span>`
     : '';
-  const canDelete = !p.author || (myUid && p.author === myUid);
+  const canDelete = canModifyAuthored(p);
   const delBtn = canDelete
     ? `<button class="btn-delete-pause" onclick="deletePause('${p.id}')" title="Supprimer la pause">✕</button>`
     : '';
@@ -1419,7 +1705,7 @@ function renderList() {
       : '';
 
     const badgeSuffix = isNext ? '← PROCHAIN' : (isCustom ? 'LIVE' : '');
-    const isMyPassage = author && author.uid === myUid;
+    const isMyPassage = isSeen && canModifyAuthored(author ? { author: author.uid, authorAccount: author.account } : null);
     let actionBtn;
     if (isCustom) {
       actionBtn = isMyPassage
@@ -1545,7 +1831,7 @@ function confirmCustomPassage() {
 }
 function deleteCustomPassage(km) {
   const author = passageAuthors[km];
-  if (author && author.uid !== myUid) return;  // pas le mien → pas touche
+  if (!canModifyAuthored(author ? { author: author.uid, authorAccount: author.account } : null)) return;
   delete seenPoints[km];
   customKm.delete(km);
   delete passageAuthors[km];
@@ -1596,7 +1882,12 @@ function confirmPause() {
     alert(`Kilomètre invalide (0 - ${formatKm(TOTAL_KM)}).`); return;
   }
   const id = genPauseId();
-  pauses[id] = { id, startSec, endSec, km, author: myUid || null, authorName: myName || 'Anonyme' };
+  pauses[id] = {
+    id, startSec, endSec, km,
+    author: myAccount || myUid || null,
+    authorAccount: !!myAccount,
+    authorName: myName || 'Anonyme'
+  };
   savePauses();
   writePauseToFirestore(pauses[id]);
   recalibrate();
@@ -1607,7 +1898,7 @@ function confirmPause() {
 function deletePause(id) {
   const p = pauses[id];
   if (!p) return;
-  if (p.author && myUid && p.author !== myUid) return;  // pas la mienne → pas touche
+  if (!canModifyAuthored(p)) return;
   delete pauses[id];
   savePauses();
   deletePauseFromFirestore(id);
@@ -1837,7 +2128,7 @@ function buildCustomPopup(km) {
   const avgPace = km > 0 ? elapsed / km : 0;
   const author = passageAuthors[km];
   const authorLabel = author ? author.name : '';
-  const canDelete = author && author.uid === myUid;
+  const canDelete = canModifyAuthored(author ? { author: author.uid, authorAccount: author.account } : null);
   return `
     <div class="point-popup">
       <div class="pp-title">🕒 km ${formatKm(km)} · LIVE</div>
@@ -2017,6 +2308,8 @@ function showTab(name) {
 async function bootstrap() {
   await loadGpxTrace();
   loadPointOverrides();        // overrides utilisateur prioritaires (drag récent)
+  loadAccountFromStorage();    // session compte (pseudo + flag connecté)
+  loadPlan();                  // plan prévisionnel personnalisé
   loadSeenPoints();            // cache localStorage (offline fallback)
   loadPauses();                // cache localStorage des pauses ravito
   recalibrate();
