@@ -448,6 +448,20 @@
       0%, 100% { box-shadow: 0 0 0 2px rgba(255, 148, 0, 0.35), 0 0 0 6px rgba(255, 148, 0, 0.15); }
       50%      { box-shadow: 0 0 0 3px rgba(255, 148, 0, 0.55), 0 0 0 10px rgba(255, 148, 0, 0.05); }
     }
+    /* Marqueur pause ravito — pastille violette */
+    .reveil-pause-icon .pause-pt-dot {
+      border-radius: 50%;
+      background: #9b59ff;
+      border: 2px solid #fff;
+      box-shadow: 0 0 0 2px rgba(155, 89, 255, 0.35), 0 0 0 6px rgba(155, 89, 255, 0.12);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      color: #fff;
+      box-sizing: border-box;
+      font-weight: 800;
+    }
     .point-popup .pp-hint { margin-top: 6px; font-size: 0.6rem; color: #888; text-align: center; }
 
     /* MODAL */
@@ -725,16 +739,10 @@
   <div class="modal-box">
     <div class="modal-handle"></div>
     <div class="modal-km">⚙️ Plan prévisionnel</div>
-    <div class="modal-label">Heure d'arrivée prévue (avec pauses) :</div>
-    <input type="time" class="modal-time-input" id="settings-arrival"/>
-    <div class="modal-label">Rythme de course (sans les pauses) :</div>
-    <div class="pace-input-row">
-      <input type="number" min="0" max="20" class="modal-time-input pace-input" id="settings-pace-min" oninput="updateSettingsSummary()"/>
-      <span class="pace-sep">'</span>
-      <input type="number" min="0" max="59" class="modal-time-input pace-input" id="settings-pace-sec" oninput="updateSettingsSummary()"/>
-      <span class="pace-sep">"/km</span>
-    </div>
-    <div class="modal-hint" id="settings-summary">⏱️ Total : —</div>
+    <div class="modal-label">Heure d'arrivée estimée par le coureur (sans pauses) :</div>
+    <input type="time" class="modal-time-input" id="settings-arrival" oninput="updateSettingsSummary()"/>
+    <div class="modal-hint" id="settings-summary">⏱️ —</div>
+    <div class="modal-hint" style="margin-top:8px;color:var(--muted)">💡 Le rythme de course sera déduit automatiquement. L'arrivée affichée se décalera ensuite en ajoutant le temps des pauses réellement prises.</div>
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeSettingsModal()">Annuler</button>
       <button class="btn-confirm" onclick="confirmSettings()">✓ Enregistrer</button>
@@ -1027,6 +1035,7 @@ function startPausesListener() {
     savePauses();
     recalibrate();
     renderList();
+    if (leafletMap) updatePauseMarkers();
     if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
   }, err => {
     console.warn('Erreur listener pauses Firestore :', err);
@@ -1178,27 +1187,24 @@ const POINTS = [
 const TOTAL_KM   = POINTS[POINTS.length - 1].km;
 
 // ─── PLAN PRÉVISIONNEL (réglable) ────────────────────────
-// BASE_PACE : rythme de course pur (sec/km), hors pauses.
-// plannedArrivalSec : heure d'arrivée prévue absolue (s depuis minuit),
-// englobant pauses + temps de course. Si < DEPART_SEC, on suppose le
-// lendemain (offset +24h).
+// plannedArrivalSec : heure d'arrivée estimée par le coureur SANS pauses
+// (s depuis minuit, +24h si < DEPART_SEC). BASE_PACE est dérivé.
+// L'arrivée affichée se décale ensuite en ajoutant les pauses réellement
+// prises (cf. recalibrate()).
 const PLAN_STORAGE_KEY = 'reveil-des-ducs:plan:v1';
-const DEFAULT_PACE_SEC = (11 * 3600) / (POINTS[POINTS.length - 1].km); // ~ 9'18"/km pour 11h pile
-const DEFAULT_ARRIVAL  = (DEPART_SEC + 11 * 3600) % 86400;             // 10h00 le lendemain
-let BASE_PACE          = DEFAULT_PACE_SEC;
-let plannedArrivalSec  = DEFAULT_ARRIVAL + (DEFAULT_ARRIVAL < DEPART_SEC ? 86400 : 0);
+const DEFAULT_ARRIVAL  = DEPART_SEC + 11 * 3600;                       // 10h00 le lendemain
+let plannedArrivalSec  = DEFAULT_ARRIVAL;
+let BASE_PACE          = (plannedArrivalSec - DEPART_SEC) / (POINTS[POINTS.length - 1].km);
 
 function loadPlan() {
   try {
     const raw = localStorage.getItem(PLAN_STORAGE_KEY);
     if (!raw) return;
     const p = JSON.parse(raw);
-    if (p && typeof p === 'object') {
-      const pace = Number(p.paceSec);
-      if (Number.isFinite(pace) && pace >= 60 && pace <= 1800) BASE_PACE = pace;
-      if (typeof p.arrivalHHMM === 'string' && /^\d{2}:\d{2}$/.test(p.arrivalHHMM)) {
-        plannedArrivalSec = hhmmToAbsArrivalSec(p.arrivalHHMM);
-      }
+    if (p && typeof p === 'object' && typeof p.arrivalHHMM === 'string'
+        && /^\d{2}:\d{2}$/.test(p.arrivalHHMM)) {
+      plannedArrivalSec = hhmmToAbsArrivalSec(p.arrivalHHMM);
+      BASE_PACE = (plannedArrivalSec - DEPART_SEC) / (POINTS[POINTS.length - 1].km);
     }
   } catch (e) {
     console.warn('Plan illisible', e);
@@ -1207,7 +1213,6 @@ function loadPlan() {
 function savePlan() {
   try {
     localStorage.setItem(PLAN_STORAGE_KEY, JSON.stringify({
-      paceSec: BASE_PACE,
       arrivalHHMM: plannedArrivalHHMM()
     }));
   } catch (e) {
@@ -1227,7 +1232,13 @@ function plannedArrivalHHMM() {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 function plannedTotalSec()  { return plannedArrivalSec - DEPART_SEC; }
-function plannedPauseSec()  { return plannedTotalSec() - BASE_PACE * TOTAL_KM; }
+// Somme des pauses déjà enregistrées (passées + futures), pour décaler
+// l'arrivée affichée et comparer au plan « sans pauses ».
+function totalRecordedPauseSec() {
+  return Object.values(pauses)
+    .filter(p => Number.isFinite(p.startSec) && Number.isFinite(p.endSec))
+    .reduce((sum, p) => sum + Math.max(0, p.endSec - p.startSec), 0);
+}
 
 function formatKm(km) {
   return Number.isInteger(km) ? String(km) : km.toFixed(1);
@@ -1527,18 +1538,21 @@ function estSec(km) {
 
 // ─── RECALIBRATION ───────────────────────────────────────
 // Allure « réelle de course » = (temps écoulé − pauses passées) / km parcourus.
-// La projection d'arrivée part du dernier passage et n'ajoute pas de pause
-// future (inconnue), mais conserve les pauses déjà prises dans le wall-clock.
+// L'arrivée affichée part du plan « sans pauses » saisi par le coureur,
+// décalé du temps des pauses réellement enregistrées. Une fois qu'il y a
+// des passages, on remplace par la projection (estSec) qui combine
+// l'allure réelle et les pauses connues.
 function recalibrate() {
   updatePlanDisplay();
   const seen = Object.entries(seenPoints)
     .map(([k,v]) => [parseFloat(k), v])
     .sort((a,b) => a[0]-b[0]);
   const banner = document.getElementById('recalib-banner');
+  const pauseAdjustedPlan = plannedArrivalSec + totalRecordedPauseSec();
+
   if (!seen.length) {
     currentPace = BASE_PACE;
-    // Pas encore de passage : on affiche le plan prévisionnel
-    document.getElementById('est-arrival').textContent = `~${plannedArrivalHHMM().replace(':', 'h')}`;
+    document.getElementById('est-arrival').textContent = `~${secToHHMM(pauseAdjustedPlan)}`;
     document.getElementById('pace-chip').textContent = formatPace(BASE_PACE);
     if (banner) { banner.classList.remove('show'); banner.innerHTML = ''; }
     return;
@@ -1548,12 +1562,21 @@ function recalibrate() {
   const runningSec = Math.max(1, lastSec - DEPART_SEC - pausedSec);
   currentPace = runningSec / lastKm;
 
-  // Arrivée estimée : même logique qu'estSec (intègre les pauses futures).
+  // Arrivée estimée (intègre allure réelle + pauses futures connues).
   const finishSec = estSec(TOTAL_KM);
+  const delta     = finishSec - pauseAdjustedPlan;
+  let aheadHtml;
+  if (Math.abs(delta) < 30) {
+    aheadHtml = ` <span style="color:var(--accent2)">· dans les temps</span>`;
+  } else if (delta < 0) {
+    aheadHtml = ` <span style="color:var(--accent2)">· ${Math.round(-delta/60)} min d'avance</span>`;
+  } else {
+    aheadHtml = ` <span style="color:var(--danger)">· ${Math.round(delta/60)} min de retard</span>`;
+  }
   const pauseLabel = pausedSec > 0
     ? ` <span style="color:var(--muted)">(− ${Math.round(pausedSec/60)} min de pause)</span>`
     : '';
-  banner.innerHTML = `⚡ Rythme recalibré : <strong>${formatPace(currentPace)}</strong>${pauseLabel} &mdash; Arrivée estimée : <strong>${secToHHMM(finishSec)}</strong>`;
+  banner.innerHTML = `⚡ Allure : <strong>${formatPace(currentPace)}</strong>${pauseLabel} &mdash; Arrivée : <strong>${secToHHMM(finishSec)}</strong>${aheadHtml}`;
   banner.classList.add('show');
   document.getElementById('est-arrival').textContent = `~${secToHHMM(finishSec)}`;
   document.getElementById('pace-chip').textContent = formatPace(currentPace);
@@ -1567,15 +1590,12 @@ function updatePlanDisplay() {
   const totalH   = Math.floor(totalSec / 3600);
   const totalM   = Math.floor((totalSec % 3600) / 60);
   const totalLbl = totalM === 0 ? `${totalH}h` : `${totalH}h${String(totalM).padStart(2,'0')}`;
-  target.textContent = `${formatKm(TOTAL_KM)} km en ${totalLbl}`;
+  target.textContent = `${formatKm(TOTAL_KM)} km en ${totalLbl} sans pauses`;
 }
 
 // ─── RÉGLAGES PLAN (modal) ───────────────────────────────
 function openSettingsModal() {
   document.getElementById('settings-arrival').value = plannedArrivalHHMM();
-  const totalSec = Math.round(BASE_PACE);
-  document.getElementById('settings-pace-min').value = Math.floor(totalSec / 60);
-  document.getElementById('settings-pace-sec').value = totalSec % 60;
   updateSettingsSummary();
   document.getElementById('modal-settings').classList.add('open');
 }
@@ -1586,40 +1606,36 @@ function updateSettingsSummary() {
   const el = document.getElementById('settings-summary');
   if (!el) return;
   const arrival = document.getElementById('settings-arrival').value;
-  const pm = parseInt(document.getElementById('settings-pace-min').value, 10);
-  const ps = parseInt(document.getElementById('settings-pace-sec').value, 10);
-  const paceSec = (Number.isFinite(pm) ? pm : 0) * 60 + (Number.isFinite(ps) ? ps : 0);
-  if (!arrival || !/^\d{2}:\d{2}$/.test(arrival) || paceSec <= 0) {
-    el.textContent = '⏱️ Renseigne une heure d\'arrivée et un rythme.';
+  if (!arrival || !/^\d{2}:\d{2}$/.test(arrival)) {
+    el.textContent = '⏱️ Renseigne l\'heure d\'arrivée estimée par le coureur.';
     return;
   }
   const arrSec   = hhmmToAbsArrivalSec(arrival);
   const totalSec = arrSec - DEPART_SEC;
-  const runSec   = paceSec * TOTAL_KM;
-  const pauseSec = totalSec - runSec;
-  const totalH = Math.floor(totalSec / 3600);
-  const totalM = Math.floor((totalSec % 3600) / 60);
-  const totalLbl = `${totalH}h${String(totalM).padStart(2,'0')}`;
-  if (pauseSec < 0) {
-    el.innerHTML = `⚠️ <span style="color:var(--danger)">Avec ce rythme, le coureur arriverait avant l'heure prévue (course pure ≈ ${Math.floor(runSec/3600)}h${String(Math.floor((runSec%3600)/60)).padStart(2,'0')}).</span>`;
-  } else {
-    const pauseMin = Math.round(pauseSec / 60);
-    el.innerHTML = `⏱️ Total <strong>${totalLbl}</strong> = course ${formatPace(paceSec)} × ${formatKm(TOTAL_KM)} km + <strong>${pauseMin} min</strong> de pauses prévues.`;
+  if (totalSec <= 0) {
+    el.innerHTML = `⚠️ <span style="color:var(--danger)">Heure d'arrivée invalide (avant le départ).</span>`;
+    return;
   }
+  const paceSec = totalSec / TOTAL_KM;
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  el.innerHTML = `⏱️ Course pure : <strong>${h}h${String(m).padStart(2,'0')}</strong> sur ${formatKm(TOTAL_KM)} km → allure <strong>${formatPace(paceSec)}</strong>.`;
 }
 function confirmSettings() {
   const arrival = document.getElementById('settings-arrival').value;
-  const pm = parseInt(document.getElementById('settings-pace-min').value, 10);
-  const ps = parseInt(document.getElementById('settings-pace-sec').value, 10);
   if (!arrival || !/^\d{2}:\d{2}$/.test(arrival)) { alert('Heure d\'arrivée invalide.'); return; }
-  const paceSec = (Number.isFinite(pm) ? pm : 0) * 60 + (Number.isFinite(ps) ? ps : 0);
-  if (paceSec < 60 || paceSec > 1800) { alert('Rythme invalide (1\'00" à 30\'00" /km).'); return; }
+  const arrSec   = hhmmToAbsArrivalSec(arrival);
+  const totalSec = arrSec - DEPART_SEC;
+  if (totalSec < 60) { alert('Heure d\'arrivée trop proche du départ.'); return; }
+  const paceSec = totalSec / TOTAL_KM;
+  if (paceSec < 60 || paceSec > 1800) { alert('Allure résultante hors plage (1\'00" à 30\'00" /km).'); return; }
   BASE_PACE         = paceSec;
-  plannedArrivalSec = hhmmToAbsArrivalSec(arrival);
+  plannedArrivalSec = arrSec;
   savePlan();
   closeSettingsModal();
   recalibrate();
   renderList();
+  if (leafletMap) updatePauseMarkers();
   if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
 }
 
@@ -1915,6 +1931,7 @@ function confirmPause() {
   recalibrate();
   closePauseModal();
   renderList();
+  if (leafletMap) updatePauseMarkers();
   if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
 }
 function deletePause(id) {
@@ -1926,6 +1943,7 @@ function deletePause(id) {
   deletePauseFromFirestore(id);
   recalibrate();
   renderList();
+  if (leafletMap) updatePauseMarkers();
   if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
 }
 
@@ -2125,6 +2143,8 @@ function initMap() {
 
   // Marqueurs des passages ad-hoc (live timing) déjà en mémoire
   customKm.forEach(km => addCustomMarker(km));
+  // Marqueurs des pauses ravito (avec km renseigné)
+  updatePauseMarkers();
 }
 
 // ─── MARQUEURS AD-HOC (live timing) ──────────────────────
@@ -2187,6 +2207,68 @@ function removeCustomMarker(km) {
 function refreshCustomMarker(km) {
   removeCustomMarker(km);
   addCustomMarker(km);
+}
+
+// ─── MARQUEURS PAUSE RAVITO (carte) ──────────────────────
+let pauseMapMarkers = {};   // pauseId -> marker
+
+function buildPauseIcon() {
+  const size = 18;
+  const html = `<div class="pause-pt-dot" style="width:${size}px;height:${size}px;">⏸</div>`;
+  return L.divIcon({
+    html,
+    className: 'reveil-pause-icon',
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+    popupAnchor: [0, -size / 2]
+  });
+}
+
+function buildPausePopup(p) {
+  const dur   = pauseDurationMin(p);
+  const auth  = p.authorName ? ` · ${p.authorName}` : '';
+  const candel = canModifyAuthored(p);
+  return `
+    <div class="point-popup">
+      <div class="pp-title">⏸️ Pause ravito · ${dur} min</div>
+      <div class="pp-coords">km ${formatKm(p.km)}${auth}</div>
+      <div class="pp-coords">${secToHHMM(p.startSec)} → ${secToHHMM(p.endSec)}</div>
+      ${candel ? `<div class="pp-actions"><button class="pp-btn pp-delete" onclick="deletePause('${p.id}')">🗑️ Supprimer</button></div>` : ''}
+    </div>
+  `;
+}
+
+function addPauseMarker(p) {
+  if (!leafletMap || !p || !p.id) return;
+  if (pauseMapMarkers[p.id]) return;
+  if (!Number.isFinite(p.km)) return;          // pas de km → pas de marqueur
+  const pos = (trace.length ? pointAtKm(p.km) : null);
+  if (!pos) return;
+  const m = L.marker([pos.lat, pos.lng], {
+    icon: buildPauseIcon(),
+    zIndexOffset: 900,
+    interactive: true
+  }).addTo(leafletMap);
+  m.bindPopup(() => buildPausePopup(pauses[p.id] || p), { minWidth: 200 });
+  pauseMapMarkers[p.id] = m;
+}
+
+function removePauseMarker(id) {
+  const m = pauseMapMarkers[id];
+  if (m && leafletMap) leafletMap.removeLayer(m);
+  delete pauseMapMarkers[id];
+}
+
+// Synchronise les marqueurs pause de la carte avec l'état `pauses`.
+function updatePauseMarkers() {
+  if (!leafletMap) return;
+  const validIds = new Set(Object.keys(pauses));
+  for (const id of Object.keys(pauseMapMarkers)) {
+    if (!validIds.has(id)) removePauseMarker(id);
+  }
+  for (const p of Object.values(pauses)) {
+    if (!pauseMapMarkers[p.id]) addPauseMarker(p);
+  }
 }
 
 function buildPointPopup(point) {
