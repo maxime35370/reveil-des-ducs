@@ -1508,7 +1508,21 @@ function estSec(km) {
     const kn = parseFloat(k);
     if (kn <= km && kn > refKm) { refKm = kn; refSec = v; }
   }
-  return refSec + (km - refKm) * currentPace;
+  // Projette à l'allure courante en réintégrant les pauses prévues
+  // (avec un km renseigné) qui se trouvent entre le dernier point vu et `km`.
+  // Pour chaque pause traversée, le wall-clock saute à la fin de la pause si
+  // le coureur arrive avant qu'elle ne se termine.
+  const onWay = Object.values(pauses)
+    .filter(p => Number.isFinite(p.km) && p.km > refKm && p.km <= km
+                  && Number.isFinite(p.startSec) && Number.isFinite(p.endSec))
+    .sort((a, b) => a.km - b.km);
+  let curKm = refKm, curSec = refSec;
+  for (const p of onWay) {
+    const arriveAtPause = curSec + (p.km - curKm) * currentPace;
+    curSec = Math.max(arriveAtPause, p.endSec);
+    curKm  = p.km;
+  }
+  return curSec + (km - curKm) * currentPace;
 }
 
 // ─── RECALIBRATION ───────────────────────────────────────
@@ -1534,7 +1548,8 @@ function recalibrate() {
   const runningSec = Math.max(1, lastSec - DEPART_SEC - pausedSec);
   currentPace = runningSec / lastKm;
 
-  const finishSec = lastSec + currentPace * (TOTAL_KM - lastKm);
+  // Arrivée estimée : même logique qu'estSec (intègre les pauses futures).
+  const finishSec = estSec(TOTAL_KM);
   const pauseLabel = pausedSec > 0
     ? ` <span style="color:var(--muted)">(− ${Math.round(pausedSec/60)} min de pause)</span>`
     : '';
