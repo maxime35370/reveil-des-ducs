@@ -218,6 +218,31 @@
       cursor: pointer;
     }
     .sync-name:hover { text-decoration: underline; }
+    .admin-toggle {
+      font-size: 1rem;
+      cursor: pointer;
+      margin-right: 8px;
+      opacity: 0.35;
+      filter: grayscale(1);
+      transition: filter 0.15s, opacity 0.15s, text-shadow 0.15s;
+      user-select: none;
+    }
+    .admin-toggle.on {
+      opacity: 1;
+      filter: none;
+      text-shadow: 0 0 6px var(--danger);
+    }
+    .admin-banner {
+      background: rgba(255, 64, 89, 0.12);
+      border-bottom: 1px solid var(--danger);
+      color: var(--danger);
+      font-family: var(--display);
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 8px 16px;
+      text-align: center;
+      letter-spacing: 0.02em;
+    }
 
     /* AUTHOR TAG in passage list */
     .author-tag {
@@ -583,7 +608,7 @@
       display: inline-block;
       margin-left: 4px;
     }
-    .btn-delete-pause {
+    .btn-delete-pause, .btn-edit-pause {
       background: transparent;
       color: var(--muted);
       border: 1px solid var(--border);
@@ -592,7 +617,9 @@
       cursor: pointer;
       font-size: 0.75rem;
     }
+    .btn-edit-pause { margin-right: 6px; }
     .btn-delete-pause:active { background: var(--border); color: var(--danger); }
+    .btn-edit-pause:active   { background: var(--border); color: var(--accent2); }
 
     /* ARRIVEE SPECIAL */
     .finish-row {
@@ -618,10 +645,13 @@
   </div>
   <div class="pace-chip" id="pace-chip">9'26"/km</div>
   <div id="sync-status" style="display:flex;align-items:center;">
+    <span class="admin-toggle" id="admin-toggle" style="display:none" onclick="toggleAdminMode()" title="Mode admin">🛡️</span>
     <span class="sync-dot" id="sync-dot"></span>
     <span class="sync-name" id="sync-name" onclick="logout()" title="Se déconnecter"></span>
   </div>
 </header>
+
+<div class="admin-banner" id="admin-banner" style="display:none">🛡️ Mode admin actif — tu peux modifier/supprimer les saisies de tout le monde</div>
 
 <div class="tabs">
   <button class="tab active" data-tab="list"  onclick="showTab('list')">📋 Passages</button>
@@ -783,9 +813,12 @@ const pausesRef   = fbDb.collection('races').doc(RACE_ID).collection('pauses');
 // UID & compte spectateur
 const NAME_STORAGE_KEY    = 'reveil-des-ducs:spectator-name';
 const ACCOUNT_STORAGE_KEY = 'reveil-des-ducs:account:v1';
+const ADMIN_MODE_KEY      = 'reveil-des-ducs:admin-mode';
 let myUid     = null;
 let myName    = localStorage.getItem(NAME_STORAGE_KEY) || '';
 let myAccount = null;            // pseudo normalisé (clé du document users)
+let myIsAdmin = false;           // flag isAdmin lu depuis le doc Firestore
+let adminMode = false;           // toggle utilisateur (override permissions)
 
 const usersRef = fbDb.collection('races').doc(RACE_ID).collection('users');
 
@@ -797,7 +830,9 @@ function accountKey(pseudo) {
 // - Sans `author` ni `authorAccount` => élément libre (legacy, suppression libre)
 // - Avec `authorAccount: true`        => réservé au pseudo correspondant
 // - Sinon (ancien UID anonyme)        => libre (modèle confiance pour anciens)
+// - Mode admin actif sur un user flaggé isAdmin = override total
 function canModifyAuthored(item) {
+  if (myIsAdmin && adminMode) return true;
   if (!item || !item.author) return true;
   if (!item.authorAccount) return true;
   return !!myAccount && item.author === myAccount;
@@ -827,22 +862,33 @@ async function hashPassword(password, salt) {
 function loadAccountFromStorage() {
   try {
     const raw = localStorage.getItem(ACCOUNT_STORAGE_KEY);
-    if (!raw) return;
-    const a = JSON.parse(raw);
-    if (a && typeof a.account === 'string' && typeof a.name === 'string') {
-      myAccount = a.account;
-      myName    = a.name;
+    if (raw) {
+      const a = JSON.parse(raw);
+      if (a && typeof a.account === 'string' && typeof a.name === 'string') {
+        myAccount = a.account;
+        myName    = a.name;
+        myIsAdmin = !!a.isAdmin;
+      }
     }
+    adminMode = localStorage.getItem(ADMIN_MODE_KEY) === '1';
   } catch (e) { /* ignore */ }
 }
 function saveAccountToStorage() {
   try {
     if (myAccount && myName) {
-      localStorage.setItem(ACCOUNT_STORAGE_KEY, JSON.stringify({ account: myAccount, name: myName }));
+      localStorage.setItem(ACCOUNT_STORAGE_KEY, JSON.stringify({
+        account: myAccount, name: myName, isAdmin: myIsAdmin
+      }));
       localStorage.setItem(NAME_STORAGE_KEY, myName);
     } else {
       localStorage.removeItem(ACCOUNT_STORAGE_KEY);
     }
+  } catch (e) { /* ignore */ }
+}
+function saveAdminMode() {
+  try {
+    if (adminMode) localStorage.setItem(ADMIN_MODE_KEY, '1');
+    else           localStorage.removeItem(ADMIN_MODE_KEY);
   } catch (e) { /* ignore */ }
 }
 function logout() {
@@ -850,9 +896,61 @@ function logout() {
   if (!confirm(`Se déconnecter de « ${myName} » ?`)) return;
   myAccount = null;
   myName    = '';
+  myIsAdmin = false;
+  adminMode = false;
   saveAccountToStorage();
+  saveAdminMode();
+  updateAdminUi();
   document.getElementById('sync-name').textContent = '';
   openLoginModal();
+}
+
+// Re-récupère depuis Firestore le flag isAdmin (utile si le maintainer
+// l'a promu via la console Firebase après une première connexion).
+async function refreshAccountAdminStatus() {
+  if (!firestoreReady || !myAccount) return;
+  try {
+    const snap = await usersRef.doc(myAccount).get();
+    if (!snap.exists) return;
+    const data = snap.data() || {};
+    const newAdmin = !!data.isAdmin;
+    if (newAdmin !== myIsAdmin) {
+      myIsAdmin = newAdmin;
+      if (!myIsAdmin) { adminMode = false; saveAdminMode(); }
+      saveAccountToStorage();
+      updateAdminUi();
+      renderList();
+    } else {
+      updateAdminUi();
+    }
+  } catch (e) { /* ignore */ }
+}
+
+// Toggle ON/OFF du mode admin (action utilisateur).
+function toggleAdminMode() {
+  if (!myIsAdmin) return;
+  adminMode = !adminMode;
+  saveAdminMode();
+  updateAdminUi();
+  renderList();
+  if (leafletMap) {
+    leafletMap.closePopup();          // popups carte se rechargent à l'ouverture
+    updatePauseMarkers();
+  }
+  showToast(adminMode ? '🛡️ Mode admin activé' : 'Mode admin désactivé');
+}
+
+function updateAdminUi() {
+  const btn    = document.getElementById('admin-toggle');
+  const banner = document.getElementById('admin-banner');
+  if (btn) {
+    btn.style.display = myIsAdmin ? '' : 'none';
+    btn.classList.toggle('on', adminMode);
+    btn.title = adminMode
+      ? 'Mode admin actif — cliquer pour désactiver'
+      : 'Mode admin inactif — cliquer pour activer';
+  }
+  if (banner) banner.style.display = (myIsAdmin && adminMode) ? '' : 'none';
 }
 
 // ─── MODAL LOGIN (pseudo + mot de passe) ────────────────
@@ -898,6 +996,7 @@ async function confirmLogin() {
       }
       myAccount = key;
       myName    = data.displayName || pseudoRaw;
+      myIsAdmin = !!data.isAdmin;
     } else {
       // Création de compte
       const salt = generateSalt();
@@ -906,13 +1005,18 @@ async function confirmLogin() {
         displayName: pseudoRaw,
         passwordHash: hash,
         salt,
+        isAdmin: false,
         createdAt: firebase.firestore.FieldValue.serverTimestamp()
       });
       myAccount = key;
       myName    = pseudoRaw;
+      myIsAdmin = false;
     }
+    adminMode = false;            // toujours OFF à la connexion fraîche
     saveAccountToStorage();
+    saveAdminMode();
     document.getElementById('sync-name').textContent = myName;
+    updateAdminUi();
     closeLoginModal();
     renderList();
   } catch (e) {
@@ -942,13 +1046,19 @@ function docIdForKm(km) { return String(km).replace('.', '_'); }
 async function writePassageToFirestore(km, sec, isCustom) {
   if (!firestoreReady || !myUid) return;
   try {
+    // Préserve l'auteur d'origine si on édite (mode admin ou re-saisie),
+    // sinon attribue l'auteur courant.
+    const existing = passageAuthors[km];
+    const author        = existing && existing.uid ? existing.uid : (myAccount || myUid);
+    const authorAccount = existing ? !!existing.account : !!myAccount;
+    const authorName    = existing && existing.name ? existing.name : (myName || 'Anonyme');
     await passagesRef.doc(docIdForKm(km)).set({
       km,
       sec,
       custom: !!isCustom,
-      author: myAccount || myUid,
-      authorAccount: !!myAccount,
-      authorName: myName || 'Anonyme',
+      author,
+      authorAccount,
+      authorName,
       ts: firebase.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
   } catch (e) {
@@ -981,14 +1091,18 @@ async function clearAllPassagesFirestore() {
 async function writePauseToFirestore(p) {
   if (!firestoreReady || !myUid || !p || !p.id) return;
   try {
+    // Conserve l'auteur si déjà fixé sur la pause (édition incluse).
+    const author        = p.author || (myAccount || myUid);
+    const authorAccount = p.authorAccount != null ? !!p.authorAccount : !!myAccount;
+    const authorName    = p.authorName || myName || 'Anonyme';
     await pausesRef.doc(p.id).set({
       id: p.id,
       startSec: p.startSec,
       endSec: p.endSec,
       km: p.km != null ? p.km : null,
-      author: myAccount || myUid,
-      authorAccount: !!myAccount,
-      authorName: myName || 'Anonyme',
+      author,
+      authorAccount,
+      authorName,
       ts: firebase.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
   } catch (e) {
@@ -1125,9 +1239,12 @@ async function initFirebase() {
     // Session compte locale chargée avant init Firestore ; sinon on demande le login
     if (myAccount && myName) {
       document.getElementById('sync-name').textContent = myName;
+      // Refresh du flag isAdmin (utile si promu/dégradé côté console Firebase)
+      refreshAccountAdminStatus();
     } else {
       openLoginModal();
     }
+    updateAdminUi();
 
     // Démarrer le listener temps réel
     startPassagesListener();
@@ -1651,8 +1768,11 @@ function buildPauseRowHtml(p) {
   const authorHtml = p.authorName
     ? `<span class="pause-author" style="background:${uidColor(p.author || '')}">${p.authorName}</span>`
     : '';
-  const canDelete = canModifyAuthored(p);
-  const delBtn = canDelete
+  const canEdit = canModifyAuthored(p);
+  const editBtn = canEdit
+    ? `<button class="btn-edit-pause" onclick="editPause('${p.id}')" title="Modifier la pause">✏️</button>`
+    : '';
+  const delBtn  = canEdit
     ? `<button class="btn-delete-pause" onclick="deletePause('${p.id}')" title="Supprimer la pause">✕</button>`
     : '';
   return `
@@ -1661,6 +1781,7 @@ function buildPauseRowHtml(p) {
       <div class="pause-title">${kmLabel}Pause ravito · ${dur} min</div>
       <div class="pause-meta">${secToHHMM(p.startSec)} → ${secToHHMM(p.endSec)} ${authorHtml}</div>
     </div>
+    ${editBtn}
     ${delBtn}
   `;
 }
@@ -1914,15 +2035,42 @@ function timeStrToAbsSec(str) {
   if (s < DEPART_SEC - 3600) s += 86400;
   return s;
 }
-function openPauseModal() {
-  document.getElementById('modal-pause-km').value = '';
-  document.getElementById('modal-pause-start').value = '';
-  document.getElementById('modal-pause-end').value = '';
+let pendingPauseId = null;       // id de la pause en cours d'édition (null = création)
+function openPauseModal(idForEdit) {
+  pendingPauseId = idForEdit || null;
+  const titleEl = document.getElementById('modal-pause-title');
+  if (pendingPauseId && pauses[pendingPauseId]) {
+    const p = pauses[pendingPauseId];
+    document.getElementById('modal-pause-km').value    = (p.km != null && Number.isFinite(p.km)) ? p.km : '';
+    document.getElementById('modal-pause-start').value = formatHHMM(p.startSec);
+    document.getElementById('modal-pause-end').value   = formatHHMM(p.endSec);
+    if (titleEl) titleEl.textContent = '✏️ Modifier la pause';
+  } else {
+    document.getElementById('modal-pause-km').value    = '';
+    document.getElementById('modal-pause-start').value = '';
+    document.getElementById('modal-pause-end').value   = '';
+    if (titleEl) titleEl.textContent = '⏸️ Pause ravito';
+  }
   document.getElementById('modal-pause').classList.add('open');
   setTimeout(() => document.getElementById('modal-pause-start').focus(), 50);
 }
 function closePauseModal() {
   document.getElementById('modal-pause').classList.remove('open');
+  pendingPauseId = null;
+}
+function editPause(id) {
+  const p = pauses[id];
+  if (!p) return;
+  if (!canModifyAuthored(p)) return;
+  openPauseModal(id);
+}
+// Renvoie une heure absolue sec en chaîne HH:MM pour pré-remplir un <input type="time">.
+function formatHHMM(absSec) {
+  if (!Number.isFinite(absSec)) return '';
+  const t = ((absSec % 86400) + 86400) % 86400;
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
 }
 function confirmPause() {
   const startStr = document.getElementById('modal-pause-start').value;
@@ -1937,15 +2085,25 @@ function confirmPause() {
   if (kmRaw !== '' && (!Number.isFinite(km) || km < 0 || km > TOTAL_KM)) {
     alert(`Kilomètre invalide (0 - ${formatKm(TOTAL_KM)}).`); return;
   }
-  const id = genPauseId();
-  pauses[id] = {
-    id, startSec, endSec, km,
-    author: myAccount || myUid || null,
-    authorAccount: !!myAccount,
-    authorName: myName || 'Anonyme'
-  };
+  if (pendingPauseId && pauses[pendingPauseId]) {
+    // Édition : on conserve id et author d'origine
+    const existing = pauses[pendingPauseId];
+    pauses[pendingPauseId] = {
+      ...existing,
+      startSec, endSec, km
+    };
+  } else {
+    const id = genPauseId();
+    pauses[id] = {
+      id, startSec, endSec, km,
+      author: myAccount || myUid || null,
+      authorAccount: !!myAccount,
+      authorName: myName || 'Anonyme'
+    };
+    pendingPauseId = id;          // pour le write Firestore juste après
+  }
   savePauses();
-  writePauseToFirestore(pauses[id]);
+  writePauseToFirestore(pauses[pendingPauseId]);
   recalibrate();
   closePauseModal();
   renderList();
@@ -2251,7 +2409,10 @@ function buildPausePopup(p) {
       <div class="pp-title">⏸️ Pause ravito · ${dur} min</div>
       <div class="pp-coords">km ${formatKm(p.km)}${auth}</div>
       <div class="pp-coords">${secToHHMM(p.startSec)} → ${secToHHMM(p.endSec)}</div>
-      ${candel ? `<div class="pp-actions"><button class="pp-btn pp-delete" onclick="deletePause('${p.id}')">🗑️ Supprimer</button></div>` : ''}
+      ${candel ? `<div class="pp-actions">
+        <button class="pp-btn" onclick="editPause('${p.id}')">✏️ Modifier</button>
+        <button class="pp-btn pp-delete" onclick="deletePause('${p.id}')">🗑️ Supprimer</button>
+      </div>` : ''}
     </div>
   `;
 }
