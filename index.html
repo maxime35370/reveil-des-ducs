@@ -2034,26 +2034,52 @@ function renderList() {
     appendPauseRows(container, pauseBuckets[String(point.km)]);
   });
 
-  // Arrivée
+  // Arrivée — fonctionne comme un checkpoint : on peut enregistrer
+  // l'heure réelle d'arrivée, ce qui fige la projection et permet de
+  // comparer au plan prévisionnel.
+  const finishSeen     = !!seenPoints[TOTAL_KM];
+  const finishAuthor   = passageAuthors[TOTAL_KM];
+  const canEditFinish  = canModifyAuthored(finishAuthor
+    ? { author: finishAuthor.uid, authorAccount: finishAuthor.account }
+    : null);
+  const finishAuthorHtml = (finishSeen && finishAuthor)
+    ? `<span class="author-tag" style="background:${uidColor(finishAuthor.uid)}">${finishAuthor.name}</span>`
+    : '';
+  const finishActualLine = finishSeen
+    ? `<div class="point-actual">🏁 Arrivée à ${secToHHMM(seenPoints[TOTAL_KM])} ${finishAuthorHtml}</div>`
+    : '';
+  const finishBtn = finishSeen
+    ? (canEditFinish
+        ? `<button class="btn-vu done" onclick="openModal(${TOTAL_KM})">✓ Arrivé</button>`
+        : `<span class="btn-vu done" style="opacity:0.5;cursor:default">✓ Arrivé</span>`)
+    : `<button class="btn-vu" onclick="openModal(${TOTAL_KM})">🏁 Vu !</button>`;
   const finDiv = document.createElement('div');
   finDiv.className = 'finish-row';
+  finDiv.id = `pt-${TOTAL_KM}`;
   finDiv.innerHTML = `
     <div class="km-badge" style="color:var(--accent2)">🏁<small>ARRIVÉE</small></div>
     <div class="point-center">
-      <div class="point-time">${secToHHMM(estSec(TOTAL_KM))}</div>
+      <div class="point-time">${secToHHMM(finishSeen ? seenPoints[TOTAL_KM] : estSec(TOTAL_KM))}</div>
       <div class="point-gap">Port de Vannes</div>
+      ${finishActualLine}
     </div>
+    ${finishBtn}
   `;
   container.appendChild(finDiv);
 
   // Next label
-  document.getElementById('next-label').textContent =
-    nextKm != null ? `Prochain → km ${formatKm(nextKm)}` : '🎉 Course terminée !';
+  let nextLabel;
+  if (nextKm != null)         nextLabel = `Prochain → km ${formatKm(nextKm)}`;
+  else if (!finishSeen)       nextLabel = `Prochain → 🏁 Arrivée`;
+  else                        nextLabel = '🎉 Course terminée !';
+  document.getElementById('next-label').textContent = nextLabel;
 
-  // Auto-scroll to next point
-  if (nextKm != null) {
+  // Auto-scroll to next point (ou vers l'arrivée si tous les checkpoints
+  // ont été vus mais l'arrivée n'est pas encore enregistrée).
+  const scrollKm = nextKm != null ? nextKm : (!finishSeen ? TOTAL_KM : null);
+  if (scrollKm != null) {
     setTimeout(() => {
-      const el = document.getElementById(`pt-${nextKm}`);
+      const el = document.getElementById(`pt-${scrollKm}`);
       el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 100);
   }
