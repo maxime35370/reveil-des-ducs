@@ -138,10 +138,16 @@
     .list-action-btn.danger { color: var(--danger); border-color: #3a1f28; }
 
     /* CHART TAB */
-    .chart-container {
+    /* Wrapper scrollable pour empiler plusieurs SVG (allure + progression). */
+    .charts-scroll {
       flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+    .chart-container {
+      flex: 0 0 auto;
       padding: 12px;
-      overflow: auto;
       display: flex;
       align-items: flex-start;
       justify-content: center;
@@ -683,7 +689,10 @@
 <!-- TAB ALLURE -->
 <div id="tab-chart" class="tab-content">
   <div class="chart-info-bar" id="chart-info"></div>
-  <div id="chart" class="chart-container"></div>
+  <div class="charts-scroll">
+    <div id="chart" class="chart-container"></div>
+    <div id="progress-chart" class="chart-container"></div>
+  </div>
 </div>
 
 <!-- TAB CARTE -->
@@ -2321,6 +2330,7 @@ function renderChart() {
       Aucun passage enregistré.<br>
       Coche tes points dans l'onglet <strong>Passages</strong>, ou ajoute un passage depuis le <strong>live timing</strong>, et l'évolution de l'allure s'affichera ici.
     </div>`;
+    renderProgressChart();  // le plan reste affichable même sans passage
     return;
   }
 
@@ -2431,6 +2441,111 @@ function renderChart() {
       ${instPaths}
       ${avgLine}
       ${dots}
+      ${axisLabels}
+      ${legend}
+    </svg>
+  `;
+  renderProgressChart();
+}
+
+// Graphique « Progression » : km parcourus (% du total) en ordonnée,
+// heure absolue en abscisse (22h30 → 11h le lendemain). Permet de voir
+// d'un coup d'œil si le coureur est en avance ou en retard sur le plan.
+function renderProgressChart() {
+  const container = document.getElementById('progress-chart');
+  if (!container) return;
+
+  const seen = Object.entries(seenPoints)
+    .map(([k, v]) => ({ km: parseFloat(k), sec: v }))
+    .filter(p => Number.isFinite(p.km) && Number.isFinite(p.sec))
+    .sort((a, b) => a.sec - b.sec);
+
+  // Fenêtre fixe pour couvrir toutes les vagues + tous les rythmes.
+  const X_START = 22 * 3600 + 30 * 60;          // 22h30
+  const X_END   = 11 * 3600 + 86400;            // 11h00 le lendemain
+  const xRange  = X_END - X_START;
+
+  const W = 820, H = 360;
+  const padL = 60, padR = 60, padT = 50, padB = 44;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  const xScale    = sec => padL + ((sec - X_START) / xRange) * plotW;
+  const yScalePct = pct => padT + (1 - pct / 100) * plotH;
+  const yScaleKm  = km  => yScalePct(100 * km / TOTAL_KM);
+
+  // Graduations Y : pourcentages avec équivalent km à droite
+  const yTicksPct = [0, 25, 50, 75, 100];
+  const yGrid = yTicksPct.map(p => {
+    const km = (p / 100) * TOTAL_KM;
+    return `
+    <line x1="${padL}" x2="${W - padR}" y1="${yScalePct(p)}" y2="${yScalePct(p)}" stroke="#1e2d42" stroke-dasharray="2 4"/>
+    <text x="${padL - 10}" y="${yScalePct(p) + 4}" text-anchor="end" fill="#5a7a9a" font-size="11" font-family="DM Mono, monospace">${p}%</text>
+    <text x="${W - padR + 8}" y="${yScalePct(p) + 4}" text-anchor="start" fill="#5a7a9a" font-size="11" font-family="DM Mono, monospace">${km.toFixed(0)} km</text>
+    `;
+  }).join('');
+
+  // Graduations X : toutes les 2h, format HHh
+  const xTickStep = 2 * 3600;
+  const xTicks = [];
+  for (let t = X_START; t <= X_END; t += xTickStep) xTicks.push(t);
+  const formatHourLabel = sec => `${String(Math.floor((sec % 86400) / 3600)).padStart(2,'0')}h`;
+  const xGrid = xTicks.map(t => `
+    <line x1="${xScale(t)}" x2="${xScale(t)}" y1="${padT}" y2="${padT + plotH + 5}" stroke="#1e2d42" stroke-dasharray="2 4"/>
+    <text x="${xScale(t)}" y="${padT + plotH + 20}" text-anchor="middle" fill="#5a7a9a" font-size="11" font-family="DM Mono, monospace">${formatHourLabel(t)}</text>
+  `).join('');
+
+  const frame = `
+    <rect x="${padL}" y="${padT}" width="${plotW}" height="${plotH}" fill="#0f1620" stroke="#1e2d42"/>
+  `;
+
+  // Ligne objectif : (DEPART_SEC, 0%) → (arrivée prévue + pauses enregistrées, 100%)
+  const planEndSec = plannedArrivalSec + totalRecordedPauseSec();
+  const x0 = Math.max(X_START, Math.min(X_END, DEPART_SEC));
+  const x1 = Math.max(X_START, Math.min(X_END, planEndSec));
+  const targetLine = `
+    <line x1="${xScale(x0)}" x2="${xScale(x1)}" y1="${yScalePct(0)}" y2="${yScalePct(100)}" stroke="#00d4aa" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.8"/>
+  `;
+
+  // Ligne de départ verticale (repère visuel)
+  const departLine = `
+    <line x1="${xScale(DEPART_SEC)}" x2="${xScale(DEPART_SEC)}" y1="${padT}" y2="${padT + plotH}" stroke="#5a7a9a" stroke-width="1" stroke-dasharray="2 4" opacity="0.5"/>
+    <text x="${xScale(DEPART_SEC)}" y="${padT - 6}" text-anchor="middle" fill="#5a7a9a" font-size="9" font-family="DM Mono, monospace">départ</text>
+  `;
+
+  // Ligne réelle : départ + chaque passage
+  const actualPts = [
+    `${xScale(DEPART_SEC)},${yScalePct(0)}`,
+    ...seen.map(s => `${xScale(s.sec)},${yScaleKm(s.km)}`)
+  ];
+  const actualLine = `<polyline points="${actualPts.join(' ')}" fill="none" stroke="#f5a623" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+  const actualDots = seen.map(s => `
+    <circle cx="${xScale(s.sec)}" cy="${yScaleKm(s.km)}" r="3.5" fill="#f5a623" stroke="#0a0e14" stroke-width="1.5"/>
+  `).join('');
+
+  const axisLabels = `
+    <text x="${padL}" y="${padT - 22}" fill="#dce8f5" font-size="12" font-weight="600" font-family="DM Mono, monospace">Progression</text>
+    <text x="${W - padR}" y="${H - 8}" text-anchor="end" fill="#5a7a9a" font-size="11" font-family="DM Mono, monospace">heure →</text>
+  `;
+
+  const legend = `
+    <g transform="translate(${padL + 10}, ${padT - 40})">
+      <line x1="0" x2="18" y1="8" y2="8" stroke="#f5a623" stroke-width="2.5"/>
+      <text x="22" y="11" fill="#dce8f5" font-size="10" font-family="DM Mono, monospace">Progression réelle</text>
+      <line x1="160" x2="178" y1="8" y2="8" stroke="#00d4aa" stroke-width="1.5" stroke-dasharray="6 4"/>
+      <text x="182" y="11" fill="#dce8f5" font-size="10" font-family="DM Mono, monospace">Plan</text>
+    </g>
+  `;
+
+  container.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+      ${frame}
+      ${yGrid}
+      ${xGrid}
+      ${departLine}
+      ${targetLine}
+      ${actualLine}
+      ${actualDots}
       ${axisLabels}
       ${legend}
     </svg>
