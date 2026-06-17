@@ -641,7 +641,7 @@
   <div class="header-icon">🏃</div>
   <div class="header-text">
     <div class="header-title">RÉVEIL DES DUCS — SUIVI</div>
-    <div class="header-sub">27 juin 2026 · Départ 23h00 · Suscinio → Vannes</div>
+    <div class="header-sub">27 juin 2026 · Départ <span id="header-departure">23h00</span> · Suscinio → Vannes</div>
   </div>
   <div class="pace-chip" id="pace-chip">9'26"/km</div>
   <div id="sync-status" style="display:flex;align-items:center;">
@@ -771,7 +771,10 @@
   <div class="modal-box">
     <div class="modal-handle"></div>
     <div class="modal-km">⚙️ Plan prévisionnel</div>
-    <div class="modal-label">Heure d'arrivée estimée par le coureur (sans pauses) :</div>
+    <div class="modal-label">Heure de départ effective (vague SAS) :</div>
+    <input type="time" class="modal-time-input" id="settings-departure" oninput="updateSettingsSummary()"/>
+    <div class="modal-hint" style="color:var(--accent2)">🛡️ Cette heure est partagée avec tous les spectateurs.</div>
+    <div class="modal-label" style="margin-top:14px">Heure d'arrivée estimée par le coureur (sans pauses) :</div>
     <input type="time" class="modal-time-input" id="settings-arrival" oninput="updateSettingsSummary()"/>
     <div class="modal-hint" id="settings-summary">⏱️ —</div>
     <div class="modal-hint" style="margin-top:8px;color:var(--muted)">💡 Le rythme de course sera déduit automatiquement. L'arrivée affichée se décalera ensuite en ajoutant le temps des pauses réellement prises.</div>
@@ -809,6 +812,7 @@ fbDb.enablePersistence({ synchronizeTabs: true }).catch(() => {});
 const RACE_ID = 'reveil-2026';
 const passagesRef = fbDb.collection('races').doc(RACE_ID).collection('passages');
 const pausesRef   = fbDb.collection('races').doc(RACE_ID).collection('pauses');
+const planRef     = fbDb.collection('races').doc(RACE_ID).collection('plan').doc('current');
 
 // UID & compte spectateur
 const NAME_STORAGE_KEY    = 'reveil-des-ducs:spectator-name';
@@ -1129,6 +1133,46 @@ async function clearAllPausesFirestore() {
   }
 }
 
+// ─── PLAN PARTAGÉ (FIRESTORE) ───────────────────────────
+// Seule l'heure de départ effective est synchronisée — l'heure d'arrivée
+// reste un réglage perso de chaque spectateur.
+async function writeDepartureToFirestore(hhmm) {
+  if (!firestoreReady || !myUid) return;
+  try {
+    await planRef.set({
+      departureHHMM: hhmm,
+      updatedBy:     myName || 'Anonyme',
+      updatedAt:     firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+  } catch (e) {
+    console.warn('Erreur écriture plan Firestore :', e);
+  }
+}
+
+let unsubPlan = null;
+function startPlanListener() {
+  if (unsubPlan) unsubPlan();
+  unsubPlan = planRef.onSnapshot(doc => {
+    const d = doc.data();
+    if (!d || typeof d.departureHHMM !== 'string'
+        || !/^\d{2}:\d{2}$/.test(d.departureHHMM)) return;
+    const newDepart = hhmmToSecOfDay(d.departureHHMM);
+    if (newDepart === DEPART_SEC) return;  // pas de changement → no-op
+    DEPART_SEC         = newDepart;
+    recomputeBasePace();
+    departureUpdatedBy = d.updatedBy || null;
+    departureUpdatedAt = d.updatedAt || null;
+    savePlan();
+    updateHeaderDeparture();
+    recalibrate();
+    renderList();
+    if (leafletMap) updatePauseMarkers();
+    if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
+  }, err => {
+    console.warn('Erreur listener plan Firestore :', err);
+  });
+}
+
 let unsubPauses = null;
 function startPausesListener() {
   if (unsubPauses) unsubPauses();
@@ -1249,6 +1293,7 @@ async function initFirebase() {
     // Démarrer le listener temps réel
     startPassagesListener();
     startPausesListener();
+    startPlanListener();
   } catch (e) {
     console.warn('Firebase init échouée, mode local uniquement :', e);
     setSyncStatus(false);
@@ -1257,7 +1302,8 @@ async function initFirebase() {
 }
 
 // ─── CONFIG ─────────────────────────────────────────────
-const DEPART_SEC = 23 * 3600;       // 23h00 en secondes
+const DEFAULT_DEPART_SEC = 23 * 3600;     // 23h00 par défaut
+let   DEPART_SEC         = DEFAULT_DEPART_SEC;  // ajustable (vagues toutes les 5 min)
 
 // Points de repérage spectateur.
 // Les positions (lat/lng) sont les spots où l'observateur se placera.
@@ -1310,21 +1356,33 @@ const TOTAL_KM   = POINTS[POINTS.length - 1].km;
 // (s depuis minuit, +24h si < DEPART_SEC). BASE_PACE est dérivé.
 // L'arrivée affichée se décale ensuite en ajoutant les pauses réellement
 // prises (cf. recalibrate()).
+// L'heure de départ effective (DEPART_SEC) est synchronisée entre
+// spectateurs via Firestore (doc plan/current) : un spectateur la met à
+// jour quand la vague de départ effective est connue, tous les autres
+// la reçoivent en temps réel.
 const PLAN_STORAGE_KEY = 'reveil-des-ducs:plan:v1';
 const DEFAULT_ARRIVAL  = DEPART_SEC + 11 * 3600;                       // 10h00 le lendemain
 let plannedArrivalSec  = DEFAULT_ARRIVAL;
 let BASE_PACE          = (plannedArrivalSec - DEPART_SEC) / (POINTS[POINTS.length - 1].km);
+let departureUpdatedBy = null;
+let departureUpdatedAt = null;
 
+function recomputeBasePace() {
+  BASE_PACE = (plannedArrivalSec - DEPART_SEC) / (POINTS[POINTS.length - 1].km);
+}
 function loadPlan() {
   try {
     const raw = localStorage.getItem(PLAN_STORAGE_KEY);
     if (!raw) return;
     const p = JSON.parse(raw);
-    if (p && typeof p === 'object' && typeof p.arrivalHHMM === 'string'
-        && /^\d{2}:\d{2}$/.test(p.arrivalHHMM)) {
-      plannedArrivalSec = hhmmToAbsArrivalSec(p.arrivalHHMM);
-      BASE_PACE = (plannedArrivalSec - DEPART_SEC) / (POINTS[POINTS.length - 1].km);
+    if (!p || typeof p !== 'object') return;
+    if (typeof p.departureHHMM === 'string' && /^\d{2}:\d{2}$/.test(p.departureHHMM)) {
+      DEPART_SEC = hhmmToSecOfDay(p.departureHHMM);
     }
+    if (typeof p.arrivalHHMM === 'string' && /^\d{2}:\d{2}$/.test(p.arrivalHHMM)) {
+      plannedArrivalSec = hhmmToAbsArrivalSec(p.arrivalHHMM);
+    }
+    recomputeBasePace();
   } catch (e) {
     console.warn('Plan illisible', e);
   }
@@ -1332,17 +1390,27 @@ function loadPlan() {
 function savePlan() {
   try {
     localStorage.setItem(PLAN_STORAGE_KEY, JSON.stringify({
-      arrivalHHMM: plannedArrivalHHMM()
+      arrivalHHMM:   plannedArrivalHHMM(),
+      departureHHMM: departureHHMM()
     }));
   } catch (e) {
     console.warn('Plan non sauvegardé', e);
   }
 }
-function hhmmToAbsArrivalSec(hhmm) {
+function hhmmToSecOfDay(hhmm) {
   const [h, m] = hhmm.split(':').map(Number);
-  let s = h * 3600 + m * 60;
+  return h * 3600 + m * 60;
+}
+function hhmmToAbsArrivalSec(hhmm) {
+  let s = hhmmToSecOfDay(hhmm);
   if (s < DEPART_SEC - 3600) s += 86400; // arrivée le lendemain
   return s;
+}
+function departureHHMM() {
+  const t = DEPART_SEC % 86400;
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 function plannedArrivalHHMM() {
   const t = plannedArrivalSec % 86400;
@@ -1351,6 +1419,11 @@ function plannedArrivalHHMM() {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 function plannedTotalSec()  { return plannedArrivalSec - DEPART_SEC; }
+// Texte du header (« Départ 23h00 ») resynchronisé à chaque changement.
+function updateHeaderDeparture() {
+  const el = document.getElementById('header-departure');
+  if (el) el.textContent = departureHHMM().replace(':', 'h');
+}
 // Somme des pauses déjà enregistrées (passées + futures), pour décaler
 // l'arrivée affichée et comparer au plan « sans pauses ».
 function totalRecordedPauseSec() {
@@ -1714,7 +1787,8 @@ function updatePlanDisplay() {
 
 // ─── RÉGLAGES PLAN (modal) ───────────────────────────────
 function openSettingsModal() {
-  document.getElementById('settings-arrival').value = plannedArrivalHHMM();
+  document.getElementById('settings-departure').value = departureHHMM();
+  document.getElementById('settings-arrival').value   = plannedArrivalHHMM();
   updateSettingsSummary();
   document.getElementById('modal-settings').classList.add('open');
 }
@@ -1724,13 +1798,22 @@ function closeSettingsModal() {
 function updateSettingsSummary() {
   const el = document.getElementById('settings-summary');
   if (!el) return;
-  const arrival = document.getElementById('settings-arrival').value;
+  const departure = document.getElementById('settings-departure').value;
+  const arrival   = document.getElementById('settings-arrival').value;
+  if (!departure || !/^\d{2}:\d{2}$/.test(departure)) {
+    el.textContent = '⏱️ Renseigne l\'heure de départ effective.';
+    return;
+  }
   if (!arrival || !/^\d{2}:\d{2}$/.test(arrival)) {
     el.textContent = '⏱️ Renseigne l\'heure d\'arrivée estimée par le coureur.';
     return;
   }
-  const arrSec   = hhmmToAbsArrivalSec(arrival);
-  const totalSec = arrSec - DEPART_SEC;
+  const depSec = hhmmToSecOfDay(departure);
+  // Réutilise la logique « arrivée le lendemain » avec le nouveau départ
+  // sans toucher à DEPART_SEC tant qu'on n'a pas confirmé.
+  let arrSec = hhmmToSecOfDay(arrival);
+  if (arrSec < depSec - 3600) arrSec += 86400;
+  const totalSec = arrSec - depSec;
   if (totalSec <= 0) {
     el.innerHTML = `⚠️ <span style="color:var(--danger)">Heure d'arrivée invalide (avant le départ).</span>`;
     return;
@@ -1741,16 +1824,25 @@ function updateSettingsSummary() {
   el.innerHTML = `⏱️ Course pure : <strong>${h}h${String(m).padStart(2,'0')}</strong> sur ${formatKm(TOTAL_KM)} km → allure <strong>${formatPace(paceSec)}</strong>.`;
 }
 function confirmSettings() {
-  const arrival = document.getElementById('settings-arrival').value;
-  if (!arrival || !/^\d{2}:\d{2}$/.test(arrival)) { alert('Heure d\'arrivée invalide.'); return; }
-  const arrSec   = hhmmToAbsArrivalSec(arrival);
-  const totalSec = arrSec - DEPART_SEC;
+  const departure = document.getElementById('settings-departure').value;
+  const arrival   = document.getElementById('settings-arrival').value;
+  if (!departure || !/^\d{2}:\d{2}$/.test(departure)) { alert('Heure de départ invalide.'); return; }
+  if (!arrival   || !/^\d{2}:\d{2}$/.test(arrival))   { alert('Heure d\'arrivée invalide.'); return; }
+  const depSec = hhmmToSecOfDay(departure);
+  // Calcule l'arrivée par rapport au futur départ pour le check de validité.
+  let arrSec = hhmmToSecOfDay(arrival);
+  if (arrSec < depSec - 3600) arrSec += 86400;
+  const totalSec = arrSec - depSec;
   if (totalSec < 60) { alert('Heure d\'arrivée trop proche du départ.'); return; }
   const paceSec = totalSec / TOTAL_KM;
   if (paceSec < 60 || paceSec > 1800) { alert('Allure résultante hors plage (1\'00" à 30\'00" /km).'); return; }
-  BASE_PACE         = paceSec;
+  const departureChanged = depSec !== DEPART_SEC;
+  DEPART_SEC        = depSec;
   plannedArrivalSec = arrSec;
+  BASE_PACE         = paceSec;
   savePlan();
+  if (departureChanged) writeDepartureToFirestore(departure);
+  updateHeaderDeparture();
   closeSettingsModal();
   recalibrate();
   renderList();
@@ -2595,6 +2687,7 @@ async function bootstrap() {
   loadPlan();                  // plan prévisionnel personnalisé
   loadSeenPoints();            // cache localStorage (offline fallback)
   loadPauses();                // cache localStorage des pauses ravito
+  updateHeaderDeparture();     // header reflète l'éventuel departureHHMM du cache
   recalibrate();
   renderList();
 
