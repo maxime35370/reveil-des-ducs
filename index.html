@@ -720,9 +720,9 @@
     <div class="modal-km">➕ Ajouter un passage</div>
     <div class="modal-label">Kilomètre :</div>
     <input type="number" step="0.1" min="0" class="modal-time-input" id="modal-custom-km" placeholder="ex: 10.5"/>
-    <div class="modal-label">Temps écoulé depuis le départ (HH:MM) :</div>
-    <input type="time" class="modal-time-input" id="modal-custom-elapsed" value="01:00"/>
-    <div class="modal-hint">💡 Depuis le live timing : si le coureur a mis 1h30 pour atteindre le km 10.5, entre 01:30 ici.</div>
+    <div class="modal-label">Heure de passage (HH:MM) :</div>
+    <input type="time" class="modal-time-input" id="modal-custom-time"/>
+    <div class="modal-hint">💡 Heure réelle de passage (telle que lue sur Livetrail ou ton téléphone). L'app gère le passage de minuit.</div>
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeCustomModal()">Annuler</button>
       <button class="btn-confirm" onclick="confirmCustomPassage()">✓ Ajouter</button>
@@ -2107,8 +2107,8 @@ function confirmVu() {
 
 // ─── PASSAGE AD-HOC (live timing) ────────────────────────
 function openCustomModal() {
-  document.getElementById('modal-custom-km').value = '';
-  document.getElementById('modal-custom-elapsed').value = '01:00';
+  document.getElementById('modal-custom-km').value   = '';
+  document.getElementById('modal-custom-time').value = '';
   document.getElementById('modal-custom').classList.add('open');
   setTimeout(() => document.getElementById('modal-custom-km').focus(), 50);
 }
@@ -2117,26 +2117,21 @@ function closeCustomModal() {
 }
 function confirmCustomPassage() {
   const kmRaw = document.getElementById('modal-custom-km').value.trim().replace(',', '.');
-  const elapsed = document.getElementById('modal-custom-elapsed').value;
+  const timeStr = document.getElementById('modal-custom-time').value;
   const km = parseFloat(kmRaw);
   if (!Number.isFinite(km) || km <= 0 || km >= TOTAL_KM) {
     alert(`Kilomètre invalide (doit être entre 0 et ${formatKm(TOTAL_KM)}).`);
     return;
   }
-  if (!elapsed) {
-    alert('Temps écoulé manquant.');
-    return;
-  }
-  const elapsedSec = timeStrToSec(elapsed);
-  if (!Number.isFinite(elapsedSec) || elapsedSec <= 0) {
-    alert('Le temps écoulé doit être positif.');
-    return;
-  }
-  const absSec = DEPART_SEC + elapsedSec;
-  seenPoints[km] = absSec;
+  if (!timeStr) { alert('Heure de passage requise.'); return; }
+  let sec = timeStrToSec(timeStr);
+  if (!Number.isFinite(sec)) { alert('Heure invalide.'); return; }
+  if (sec < DEPART_SEC - 3600) sec += 86400; // traversée minuit
+  if (sec <= DEPART_SEC) { alert('Heure de passage avant le départ.'); return; }
+  seenPoints[km] = sec;
   customKm.add(km);
   saveSeenPoints();
-  writePassageToFirestore(km, absSec, true);
+  writePassageToFirestore(km, sec, true);
   recalibrate();
   closeCustomModal();
   renderList();
