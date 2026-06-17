@@ -1728,12 +1728,44 @@ function estSec(km) {
   return curSec + (km - curKm) * currentPace;
 }
 
+// Allure « récente » : créneau des derniers `windowKm` km terminés.
+// Sert à détecter un coup de mou ou une accélération que la moyenne
+// depuis le départ ne reflète pas encore. Retourne null s'il n'y a pas
+// au moins 2 passages (seuil minimum pour avoir un créneau).
+function recentRunningPace(windowKm) {
+  const seen = Object.entries(seenPoints)
+    .map(([k, v]) => ({ km: parseFloat(k), sec: v }))
+    .filter(p => Number.isFinite(p.km) && Number.isFinite(p.sec) && p.km > 0)
+    .sort((a, b) => a.km - b.km);
+  if (seen.length < 2) return null;
+  const last = seen[seen.length - 1];
+  const minKm = last.km - windowKm;
+  // Premier passage qui rentre dans la fenêtre. Si aucun (avant-dernier
+  // trop loin), on retombe sur le passage immédiatement précédent —
+  // moins représentatif des « derniers km » mais on a quand même un
+  // créneau exploitable.
+  let start = null;
+  for (const p of seen) {
+    if (p.km >= minKm && p.km < last.km) { start = p; break; }
+  }
+  if (!start) start = seen[seen.length - 2];
+  const dKm = last.km - start.km;
+  if (dKm <= 0) return null;
+  const dSec = last.sec - start.sec;
+  const pausedInWindow = pauseBetween(start.sec, last.sec);
+  const runningSec = dSec - pausedInWindow;
+  if (runningSec <= 0) return null;
+  return runningSec / dKm;
+}
+
 // ─── RECALIBRATION ───────────────────────────────────────
 // Allure « réelle de course » = (temps écoulé − pauses passées) / km parcourus.
 // L'arrivée affichée part du plan « sans pauses » saisi par le coureur,
 // décalé du temps des pauses réellement enregistrées. Une fois qu'il y a
 // des passages, on remplace par la projection (estSec) qui combine
 // l'allure réelle et les pauses connues.
+// La projection (currentPace) privilégie l'allure des 5 derniers km
+// quand disponible pour refléter le ralentissement éventuel.
 function recalibrate() {
   updatePlanDisplay();
   const seen = Object.entries(seenPoints)
@@ -1752,7 +1784,10 @@ function recalibrate() {
   const [lastKm, lastSec] = seen[seen.length - 1];
   const pausedSec = pauseTimeUpTo(lastSec);
   const runningSec = Math.max(1, lastSec - DEPART_SEC - pausedSec);
-  currentPace = runningSec / lastKm;
+  const overallPace = runningSec / lastKm;
+  const recentPace  = recentRunningPace(5);
+  // La projection utilise le récent s'il est dispo, sinon l'overall.
+  currentPace = recentPace != null ? recentPace : overallPace;
 
   // Arrivée estimée (intègre allure réelle + pauses futures connues).
   const finishSec = estSec(TOTAL_KM);
@@ -1768,10 +1803,24 @@ function recalibrate() {
   const pauseLabel = pausedSec > 0
     ? ` <span style="color:var(--muted)">(− ${Math.round(pausedSec/60)} min de pause)</span>`
     : '';
-  banner.innerHTML = `⚡ Allure : <strong>${formatPace(currentPace)}</strong>${pauseLabel} &mdash; Arrivée : <strong>${secToHHMM(finishSec)}</strong>${aheadHtml}`;
+  // Bandeau : moyenne depuis le départ + allure récente (5 km) colorée
+  // selon la tendance par rapport à la moyenne (vert = plus rapide,
+  // rouge = ralentissement, neutre = écart < 10 s/km).
+  let recentHtml = '';
+  if (recentPace != null) {
+    const diff = recentPace - overallPace;
+    let color = 'var(--muted)';
+    let arrow = '';
+    if (diff < -10)      { color = 'var(--accent2)'; arrow = ' ↑'; }
+    else if (diff > 10)  { color = 'var(--danger)';  arrow = ' ↓'; }
+    recentHtml = ` · <span style="color:${color}">récent <strong>${formatPace(recentPace)}</strong>${arrow}</span>`;
+  }
+  banner.innerHTML = `⚡ Allure moyenne : <strong>${formatPace(overallPace)}</strong>${recentHtml}${pauseLabel} &mdash; Arrivée : <strong>${secToHHMM(finishSec)}</strong>${aheadHtml}`;
   banner.classList.add('show');
   document.getElementById('est-arrival').textContent = `~${secToHHMM(finishSec)}`;
-  document.getElementById('pace-chip').textContent = formatPace(currentPace);
+  // Chip header : on affiche l'allure moyenne (référence stable),
+  // pas la projection courante qui peut être assez volatile.
+  document.getElementById('pace-chip').textContent = formatPace(overallPace);
 }
 
 // Met à jour le libellé d'objectif (info-bar) en fonction du plan courant.
