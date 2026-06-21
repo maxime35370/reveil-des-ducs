@@ -479,6 +479,25 @@
       0%, 100% { box-shadow: 0 0 0 2px rgba(255, 148, 0, 0.35), 0 0 0 6px rgba(255, 148, 0, 0.15); }
       50%      { box-shadow: 0 0 0 3px rgba(255, 148, 0, 0.55), 0 0 0 10px rgba(255, 148, 0, 0.05); }
     }
+    /* Marqueur ravito officiel — pastille dorée */
+    .reveil-official-icon .official-pt-dot {
+      border-radius: 50%;
+      background: #f5a623;
+      border: 2px solid #fff;
+      box-shadow: 0 0 0 2px rgba(245, 166, 35, 0.35), 0 0 0 6px rgba(245, 166, 35, 0.12);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      color: #fff;
+      box-sizing: border-box;
+      font-weight: 700;
+    }
+    .reveil-official-icon.is-planned .official-pt-dot {
+      opacity: 0.65;
+      box-shadow: 0 0 0 2px rgba(245, 166, 35, 0.15);
+    }
+
     /* Marqueur pause ravito — pastille violette */
     .reveil-pause-icon .pause-pt-dot {
       border-radius: 50%;
@@ -645,6 +664,20 @@
     .btn-delete-pause:active { background: var(--border); color: var(--danger); }
     .btn-edit-pause:active   { background: var(--border); color: var(--accent2); }
 
+    /* RAVITO OFFICIEL — pastille dorée, distincte des pauses libres */
+    .pause-row.is-official {
+      background: rgba(245, 166, 35, 0.07);
+      border-left-color: #f5a623;
+    }
+    .pause-row.is-official .pause-title { color: #f5a623; }
+    .pause-row.is-planned { opacity: 0.78; }
+    .pause-row.is-planned .pause-title::after {
+      content: " ⏳ à renseigner";
+      color: var(--muted);
+      font-weight: 400;
+      font-size: 0.92em;
+    }
+
     /* ARRIVEE SPECIAL */
     .finish-row {
       display: flex;
@@ -692,6 +725,7 @@
   <div class="list-actions">
     <button type="button" class="list-action-btn" onclick="openCustomModal()">➕ Passage (live)</button>
     <button type="button" class="list-action-btn" onclick="openPauseModal()">⏸️ Pause ravito</button>
+    <button type="button" class="list-action-btn" onclick="openOfficialRavitoModal()" title="Ajouter un point officiel (entrée/sortie à remplir plus tard)">📍 Ravito officiel</button>
     <button type="button" class="list-action-btn" onclick="openSettingsModal()" title="Régler l'heure d'arrivée prévue et le rythme de base">⚙️ Plan</button>
     <button type="button" class="list-action-btn danger" onclick="clearAllSeenPoints()" title="Effacer tous les passages et pauses">🗑️</button>
   </div>
@@ -757,18 +791,22 @@
   </div>
 </div>
 
-<!-- MODAL PAUSE RAVITO -->
+<!-- MODAL PAUSE RAVITO / RAVITO OFFICIEL -->
 <div class="modal-overlay" id="modal-pause">
   <div class="modal-box">
     <div class="modal-handle"></div>
     <div class="modal-km" id="modal-pause-title">⏸️ Pause ravito</div>
-    <div class="modal-label">Kilomètre du ravito (optionnel) :</div>
+    <div id="modal-pause-label-row" style="display:none">
+      <div class="modal-label">Label (ex « Ravito Saint-Colombier ») :</div>
+      <input type="text" class="modal-time-input" id="modal-pause-label" placeholder="optionnel" style="font-size:1rem"/>
+    </div>
+    <div class="modal-label" id="modal-pause-km-label">Kilomètre du ravito (optionnel) :</div>
     <input type="number" step="0.1" min="0" class="modal-time-input" id="modal-pause-km" placeholder="ex: 32"/>
-    <div class="modal-label">Heure d'arrêt (HH:MM) :</div>
+    <div class="modal-label" id="modal-pause-start-label">Heure d'arrêt (HH:MM) :</div>
     <input type="time" class="modal-time-input" id="modal-pause-start"/>
-    <div class="modal-label">Heure de reprise (HH:MM) :</div>
+    <div class="modal-label" id="modal-pause-end-label">Heure de reprise (HH:MM) :</div>
     <input type="time" class="modal-time-input" id="modal-pause-end"/>
-    <div class="modal-hint">💡 Ce temps de pause sera <strong>déduit</strong> du calcul d'allure moyenne pour ne pas fausser les estimations futures.</div>
+    <div class="modal-hint" id="modal-pause-hint">💡 Ce temps de pause sera <strong>déduit</strong> du calcul d'allure moyenne pour ne pas fausser les estimations futures.</div>
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closePauseModal()">Annuler</button>
       <button class="btn-confirm" onclick="confirmPause()">✓ Enregistrer</button>
@@ -1128,9 +1166,11 @@ async function writePauseToFirestore(p) {
     const authorName    = p.authorName || myName || 'Anonyme';
     await pausesRef.doc(p.id).set({
       id: p.id,
-      startSec: p.startSec,
-      endSec: p.endSec,
+      startSec: Number.isFinite(p.startSec) ? p.startSec : null,
+      endSec:   Number.isFinite(p.endSec)   ? p.endSec   : null,
       km: p.km != null ? p.km : null,
+      label:    typeof p.label === 'string' ? p.label : '',
+      official: !!p.official,
       author,
       authorAccount,
       authorName,
@@ -1207,12 +1247,21 @@ function startPausesListener() {
     const newPauses = {};
     snapshot.forEach(doc => {
       const d = doc.data();
-      if (!d || !Number.isFinite(d.startSec) || !Number.isFinite(d.endSec)) return;
+      if (!d) return;
+      const isOfficial = !!d.official;
+      const startOk = Number.isFinite(d.startSec);
+      const endOk   = Number.isFinite(d.endSec);
+      // Une pause normale doit avoir start ET end. Un ravito officiel peut
+      // être planifié (km seul) → on accepte tant qu'il y a un km.
+      if (!isOfficial && (!startOk || !endOk)) return;
+      if (isOfficial && !Number.isFinite(d.km)) return;
       newPauses[d.id || doc.id] = {
         id: d.id || doc.id,
-        startSec: d.startSec,
-        endSec: d.endSec,
+        startSec: startOk ? d.startSec : null,
+        endSec:   endOk   ? d.endSec   : null,
         km: d.km != null ? d.km : null,
+        label:    typeof d.label === 'string' ? d.label : '',
+        official: isOfficial,
         author: d.author || null,
         authorAccount: !!d.authorAccount,
         authorName: d.authorName || ''
@@ -1978,42 +2027,65 @@ function confirmSettings() {
 }
 
 // ─── RENDER LIST ─────────────────────────────────────────
-// Construit le HTML d'une ligne « pause ravito » insérée dans la liste.
+// Construit le HTML d'une ligne « pause ravito » ou « ravito officiel »
+// insérée dans la liste. Pour un ravito officiel non encore renseigné,
+// les heures sont remplacées par un placeholder.
 function buildPauseRowHtml(p) {
+  const isOfficial = !!p.official;
   const kmLabel = (p.km != null && Number.isFinite(p.km))
     ? `km ${formatKm(p.km)} · `
     : '';
-  const dur = pauseDurationMin(p);
+  const labelTxt  = (p.label && p.label.trim()) ? p.label.trim() : (isOfficial ? 'Ravito officiel' : 'Pause ravito');
+  const hasStart  = Number.isFinite(p.startSec);
+  const hasEnd    = Number.isFinite(p.endSec);
+  const dur       = (hasStart && hasEnd) ? pauseDurationMin(p) : null;
+  const durTxt    = dur != null ? ` · ${dur} min` : '';
   const authorHtml = p.authorName
     ? `<span class="pause-author" style="background:${uidColor(p.author || '')}">${p.authorName}</span>`
     : '';
+  const timeStr   = (hasStart && hasEnd)
+    ? `${secToHHMM(p.startSec)} → ${secToHHMM(p.endSec)}`
+    : (hasStart
+        ? `entrée ${secToHHMM(p.startSec)} · sortie ?`
+        : '');
   const canEdit = canModifyAuthored(p);
   const editBtn = canEdit
-    ? `<button class="btn-edit-pause" onclick="editPause('${p.id}')" title="Modifier la pause">✏️</button>`
+    ? `<button class="btn-edit-pause" onclick="editPause('${p.id}')" title="${isOfficial ? 'Modifier le ravito' : 'Modifier la pause'}">✏️</button>`
     : '';
   const delBtn  = canEdit
-    ? `<button class="btn-delete-pause" onclick="deletePause('${p.id}')" title="Supprimer la pause">✕</button>`
+    ? `<button class="btn-delete-pause" onclick="deletePause('${p.id}')" title="${isOfficial ? 'Supprimer le ravito' : 'Supprimer la pause'}">✕</button>`
     : '';
+  const icon = isOfficial ? '📍' : '⏸️';
   return `
-    <div class="pause-icon">⏸️</div>
+    <div class="pause-icon">${icon}</div>
     <div class="pause-body">
-      <div class="pause-title">${kmLabel}Pause ravito · ${dur} min</div>
-      <div class="pause-meta">${secToHHMM(p.startSec)} → ${secToHHMM(p.endSec)} ${authorHtml}</div>
+      <div class="pause-title">${kmLabel}${labelTxt}${durTxt}</div>
+      <div class="pause-meta">${timeStr} ${authorHtml}</div>
     </div>
     ${editBtn}
     ${delBtn}
   `;
 }
 // Range les pauses dans des seaux : « après tel km » ou « __top » si aucune
-// passage antérieure.
+// passage antérieure. Les ravitos officiels planifiés (sans startSec) sont
+// rangés par km (cherchent le checkpoint juste avant leur km).
 function bucketPauses(entries) {
   const buckets = {};
-  const arr = Object.values(pauses).sort((a, b) => a.startSec - b.startSec);
+  const arr = Object.values(pauses).slice().sort((a, b) => {
+    const sa = Number.isFinite(a.startSec) ? a.startSec : (Number.isFinite(a.km) ? a.km * 1000 : 0);
+    const sb = Number.isFinite(b.startSec) ? b.startSec : (Number.isFinite(b.km) ? b.km * 1000 : 0);
+    return sa - sb;
+  });
   for (const p of arr) {
     let key = '__top';
     if (p.km != null && entries.some(e => e.km === p.km)) {
       key = String(p.km);
-    } else {
+    } else if (p.km != null) {
+      // Ravito sans entrée correspondante exacte : on le rattache au km
+      // checkpoint juste inférieur si dispo.
+      const cps = entries.filter(e => e.km <= p.km).sort((a, b) => b.km - a.km);
+      if (cps.length) key = String(cps[0].km);
+    } else if (Number.isFinite(p.startSec)) {
       let bestSec = -Infinity, bestKm = null;
       for (const [k, v] of Object.entries(seenPoints)) {
         if (v <= p.startSec && v > bestSec) { bestSec = v; bestKm = parseFloat(k); }
@@ -2028,7 +2100,11 @@ function appendPauseRows(container, list) {
   if (!list || !list.length) return;
   for (const p of list) {
     const div = document.createElement('div');
-    div.className = 'pause-row';
+    const isPlanned = !!p.official && (!Number.isFinite(p.startSec) || !Number.isFinite(p.endSec));
+    const classes = ['pause-row'];
+    if (p.official) classes.push('is-official');
+    if (isPlanned)  classes.push('is-planned');
+    div.className = classes.join(' ');
     div.innerHTML = buildPauseRowHtml(p);
     container.appendChild(div);
   }
@@ -2275,28 +2351,61 @@ function timeStrToAbsSec(str) {
   if (s < DEPART_SEC - 3600) s += 86400;
   return s;
 }
-let pendingPauseId = null;       // id de la pause en cours d'édition (null = création)
-function openPauseModal(idForEdit) {
-  pendingPauseId = idForEdit || null;
+let pendingPauseId = null;          // id de la pause en cours d'édition (null = création)
+let pendingPauseIsOfficial = false; // true = mode ravito officiel
+function applyPauseModalMode(isOfficial) {
+  pendingPauseIsOfficial = !!isOfficial;
+  document.getElementById('modal-pause-label-row').style.display = isOfficial ? '' : 'none';
   const titleEl = document.getElementById('modal-pause-title');
+  const startLb = document.getElementById('modal-pause-start-label');
+  const endLb   = document.getElementById('modal-pause-end-label');
+  const kmLb    = document.getElementById('modal-pause-km-label');
+  const hintEl  = document.getElementById('modal-pause-hint');
+  if (isOfficial) {
+    if (titleEl) titleEl.textContent = '📍 Ravito officiel';
+    if (startLb) startLb.textContent = 'Heure d\'entrée (HH:MM, optionnelle) :';
+    if (endLb)   endLb.textContent   = 'Heure de sortie (HH:MM, optionnelle) :';
+    if (kmLb)    kmLb.textContent    = 'Kilomètre du ravito :';
+    if (hintEl)  hintEl.innerHTML    = '💡 Tu peux enregistrer un point officiel avec juste le km, et compléter les heures plus tard (depuis Livetrail). À l\'ajout de l\'heure d\'entrée, un passage est créé automatiquement pour affiner les projections.';
+  } else {
+    if (titleEl) titleEl.textContent = '⏸️ Pause ravito';
+    if (startLb) startLb.textContent = 'Heure d\'arrêt (HH:MM) :';
+    if (endLb)   endLb.textContent   = 'Heure de reprise (HH:MM) :';
+    if (kmLb)    kmLb.textContent    = 'Kilomètre du ravito (optionnel) :';
+    if (hintEl)  hintEl.innerHTML    = '💡 Ce temps de pause sera <strong>déduit</strong> du calcul d\'allure moyenne pour ne pas fausser les estimations futures.';
+  }
+}
+function openPauseModal(idForEdit, isOfficialForNew) {
+  pendingPauseId = idForEdit || null;
+  let isOfficial = !!isOfficialForNew;
   if (pendingPauseId && pauses[pendingPauseId]) {
     const p = pauses[pendingPauseId];
+    isOfficial = !!p.official;
     document.getElementById('modal-pause-km').value    = (p.km != null && Number.isFinite(p.km)) ? p.km : '';
     document.getElementById('modal-pause-start').value = formatHHMM(p.startSec);
     document.getElementById('modal-pause-end').value   = formatHHMM(p.endSec);
-    if (titleEl) titleEl.textContent = '✏️ Modifier la pause';
+    document.getElementById('modal-pause-label').value = p.label || '';
+    applyPauseModalMode(isOfficial);
+    const titleEl = document.getElementById('modal-pause-title');
+    if (titleEl) titleEl.textContent = isOfficial ? '✏️ Modifier le ravito officiel' : '✏️ Modifier la pause';
   } else {
     document.getElementById('modal-pause-km').value    = '';
     document.getElementById('modal-pause-start').value = '';
     document.getElementById('modal-pause-end').value   = '';
-    if (titleEl) titleEl.textContent = '⏸️ Pause ravito';
+    document.getElementById('modal-pause-label').value = '';
+    applyPauseModalMode(isOfficial);
   }
   document.getElementById('modal-pause').classList.add('open');
-  setTimeout(() => document.getElementById('modal-pause-start').focus(), 50);
+  setTimeout(() => {
+    const focusId = isOfficial ? 'modal-pause-label' : 'modal-pause-start';
+    document.getElementById(focusId).focus();
+  }, 50);
 }
+function openOfficialRavitoModal() { openPauseModal(null, true); }
 function closePauseModal() {
   document.getElementById('modal-pause').classList.remove('open');
   pendingPauseId = null;
+  pendingPauseIsOfficial = false;
 }
 function editPause(id) {
   const p = pauses[id];
@@ -2313,37 +2422,69 @@ function formatHHMM(absSec) {
   return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
 }
 function confirmPause() {
-  const startStr = document.getElementById('modal-pause-start').value;
-  const endStr   = document.getElementById('modal-pause-end').value;
-  const kmRaw    = document.getElementById('modal-pause-km').value.trim().replace(',', '.');
-  if (!startStr || !endStr) { alert('Heures d\'arrêt et de reprise requises.'); return; }
-  const startSec = timeStrToAbsSec(startStr);
-  let   endSec   = timeStrToAbsSec(endStr);
-  if (endSec <= startSec) endSec += 86400;
-  if (endSec - startSec > 12 * 3600) { alert('Durée de pause invalide (> 12h).'); return; }
-  const km = kmRaw === '' ? null : parseFloat(kmRaw);
-  if (kmRaw !== '' && (!Number.isFinite(km) || km < 0 || km > TOTAL_KM)) {
+  const startStr  = document.getElementById('modal-pause-start').value;
+  const endStr    = document.getElementById('modal-pause-end').value;
+  const kmRaw     = document.getElementById('modal-pause-km').value.trim().replace(',', '.');
+  const labelStr  = document.getElementById('modal-pause-label').value.trim();
+  const isOfficial = !!pendingPauseIsOfficial;
+
+  // Validation km : obligatoire pour un ravito officiel, optionnel pour pause libre.
+  const kmEmpty = kmRaw === '';
+  const km = kmEmpty ? null : parseFloat(kmRaw);
+  if (kmEmpty && isOfficial)  { alert('Kilomètre requis pour un ravito officiel.'); return; }
+  if (!kmEmpty && (!Number.isFinite(km) || km < 0 || km > TOTAL_KM)) {
     alert(`Kilomètre invalide (0 - ${formatKm(TOTAL_KM)}).`); return;
   }
+
+  // Validation des heures : libres pour ravito officiel, obligatoires pour pause classique.
+  let startSec = null, endSec = null;
+  if (startStr) startSec = timeStrToAbsSec(startStr);
+  if (endStr)   endSec   = timeStrToAbsSec(endStr);
+  if (!isOfficial) {
+    if (startSec == null || endSec == null) { alert('Heures d\'arrêt et de reprise requises.'); return; }
+  }
+  if (startSec != null && endSec != null) {
+    if (endSec <= startSec) endSec += 86400;
+    if (endSec - startSec > 12 * 3600) { alert('Durée de pause invalide (> 12h).'); return; }
+  }
+
   if (pendingPauseId && pauses[pendingPauseId]) {
-    // Édition : on conserve id et author d'origine
     const existing = pauses[pendingPauseId];
     pauses[pendingPauseId] = {
       ...existing,
-      startSec, endSec, km
+      startSec, endSec, km,
+      label: isOfficial ? labelStr : (existing.label || ''),
+      official: isOfficial
     };
   } else {
     const id = genPauseId();
     pauses[id] = {
       id, startSec, endSec, km,
+      label: isOfficial ? labelStr : '',
+      official: isOfficial,
       author: myAccount || myUid || null,
       authorAccount: !!myAccount,
       authorName: myName || 'Anonyme'
     };
-    pendingPauseId = id;          // pour le write Firestore juste après
+    pendingPauseId = id;
   }
   savePauses();
   writePauseToFirestore(pauses[pendingPauseId]);
+
+  // Ravito officiel + heure d'entrée renseignée → crée automatiquement un
+  // passage (custom) à ce km, sauf si un passage existe déjà à ce km.
+  if (isOfficial && Number.isFinite(startSec) && Number.isFinite(km)
+      && seenPoints[km] == null) {
+    seenPoints[km] = startSec;
+    customKm.add(km);
+    saveSeenPoints();
+    writePassageToFirestore(km, startSec, true);
+    if (leafletMap) {
+      updateMapMarkers();
+      refreshCustomMarker(km);
+    }
+  }
+
   recalibrate();
   closePauseModal();
   renderList();
@@ -2810,30 +2951,44 @@ function refreshCustomMarker(km) {
   addCustomMarker(km);
 }
 
-// ─── MARQUEURS PAUSE RAVITO (carte) ──────────────────────
+// ─── MARQUEURS PAUSE / RAVITO OFFICIEL (carte) ───────────
 let pauseMapMarkers = {};   // pauseId -> marker
 
-function buildPauseIcon() {
+function buildPauseIcon(p) {
+  const isOfficial = !!(p && p.official);
+  const isPlanned  = isOfficial && (!Number.isFinite(p.startSec) || !Number.isFinite(p.endSec));
+  if (isOfficial) {
+    const size = 20;
+    const cls  = `reveil-official-icon${isPlanned ? ' is-planned' : ''}`;
+    const html = `<div class="official-pt-dot" style="width:${size}px;height:${size}px;">📍</div>`;
+    return L.divIcon({ html, className: cls, iconSize: [size, size],
+                       iconAnchor: [size / 2, size / 2], popupAnchor: [0, -size / 2] });
+  }
   const size = 18;
   const html = `<div class="pause-pt-dot" style="width:${size}px;height:${size}px;">⏸</div>`;
-  return L.divIcon({
-    html,
-    className: 'reveil-pause-icon',
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
-    popupAnchor: [0, -size / 2]
-  });
+  return L.divIcon({ html, className: 'reveil-pause-icon', iconSize: [size, size],
+                     iconAnchor: [size / 2, size / 2], popupAnchor: [0, -size / 2] });
 }
 
 function buildPausePopup(p) {
-  const dur   = pauseDurationMin(p);
-  const auth  = p.authorName ? ` · ${p.authorName}` : '';
+  const isOfficial = !!p.official;
+  const labelTxt = (p.label && p.label.trim()) ? p.label.trim() : (isOfficial ? 'Ravito officiel' : 'Pause ravito');
+  const auth   = p.authorName ? ` · ${p.authorName}` : '';
+  const hasStart = Number.isFinite(p.startSec);
+  const hasEnd   = Number.isFinite(p.endSec);
+  const dur      = (hasStart && hasEnd) ? `· ${pauseDurationMin(p)} min` : '';
+  const timeRow  = (hasStart && hasEnd)
+    ? `<div class="pp-coords">${secToHHMM(p.startSec)} → ${secToHHMM(p.endSec)}</div>`
+    : (hasStart
+        ? `<div class="pp-coords">entrée ${secToHHMM(p.startSec)} · sortie ?</div>`
+        : `<div class="pp-coords" style="color:#aa6500">⏳ Heures à renseigner</div>`);
   const candel = canModifyAuthored(p);
+  const icon   = isOfficial ? '📍' : '⏸️';
   return `
     <div class="point-popup">
-      <div class="pp-title">⏸️ Pause ravito · ${dur} min</div>
+      <div class="pp-title">${icon} ${labelTxt} ${dur}</div>
       <div class="pp-coords">km ${formatKm(p.km)}${auth}</div>
-      <div class="pp-coords">${secToHHMM(p.startSec)} → ${secToHHMM(p.endSec)}</div>
+      ${timeRow}
       ${candel ? `<div class="pp-actions">
         <button class="pp-btn" onclick="editPause('${p.id}')">✏️ Modifier</button>
         <button class="pp-btn pp-delete" onclick="deletePause('${p.id}')">🗑️ Supprimer</button>
@@ -2849,7 +3004,7 @@ function addPauseMarker(p) {
   const pos = (trace.length ? pointAtKm(p.km) : null);
   if (!pos) return;
   const m = L.marker([pos.lat, pos.lng], {
-    icon: buildPauseIcon(),
+    icon: buildPauseIcon(p),
     zIndexOffset: 900,
     interactive: true
   }).addTo(leafletMap);
@@ -2871,7 +3026,13 @@ function updatePauseMarkers() {
     if (!validIds.has(id)) removePauseMarker(id);
   }
   for (const p of Object.values(pauses)) {
-    if (!pauseMapMarkers[p.id]) addPauseMarker(p);
+    if (!pauseMapMarkers[p.id]) {
+      addPauseMarker(p);
+    } else {
+      // Rafraîchit l'icône si l'état change (ex : ravito officiel passe
+      // de planifié à complet après saisie des heures).
+      pauseMapMarkers[p.id].setIcon(buildPauseIcon(p));
+    }
   }
 }
 
