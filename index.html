@@ -1513,6 +1513,24 @@ async function initFirebase() {
 // ─── CONFIG ─────────────────────────────────────────────
 const DEFAULT_DEPART_SEC = 23 * 3600;     // 23h00 par défaut
 let   DEPART_SEC         = DEFAULT_DEPART_SEC;  // ajustable (vagues toutes les 5 min)
+// Date du départ effectif. Permet de distinguer une session de test
+// (avant ou après le jour J) d'une utilisation en course réelle.
+const RACE_DATE_STR = '2026-06-27';
+function raceStartMs() {
+  const [y, m, d] = RACE_DATE_STR.split('-').map(Number);
+  const dt = new Date(y, m - 1, d, 0, 0, 0);
+  dt.setSeconds(DEPART_SEC);
+  return dt.getTime();
+}
+// Vrai pendant une fenêtre généreuse autour du départ (1h avant → 18h après).
+// Hors de cette fenêtre, les fonctions « live » renvoient une info
+// de « pas encore commencé / déjà terminé » plutôt que des km bidons.
+function isRaceTime() {
+  const start = raceStartMs();
+  const now   = Date.now();
+  return now >= start - 60 * 60 * 1000 && now <= start + 18 * 3600 * 1000;
+}
+function timeUntilRaceStartMs() { return raceStartMs() - Date.now(); }
 
 // Points de repérage spectateur.
 // Les positions (lat/lng) sont les spots où l'observateur se placera.
@@ -1940,7 +1958,11 @@ function estSec(km) {
 // Heure courante en secondes depuis minuit, ajustée pour la traversée
 // minuit (si le départ est tardif et qu'on est passé après 00h, on ajoute
 // 24h pour rester dans la même échelle temporelle que DEPART_SEC).
+// Renvoie null si on est hors de la fenêtre de course (test J-X) : les
+// fonctions « live » qui en dépendent doivent gérer ce cas explicitement
+// pour ne pas projeter des km bidons.
 function nowSecOfDay() {
+  if (!isRaceTime()) return null;
   const d = new Date();
   let sec = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
   if (sec < DEPART_SEC - 3600) sec += 86400;
@@ -2093,10 +2115,28 @@ function buildStatusMessage() {
     .map(([k, v]) => ({ km: parseFloat(k), sec: v }))
     .filter(p => Number.isFinite(p.km) && Number.isFinite(p.sec))
     .sort((a, b) => a.km - b.km);
-  const lines = ['🏃 Réveil des Ducs · suivi en direct'];
+  const inRace = nowSec != null;
+  const lines = inRace
+    ? ['🏃 Réveil des Ducs · suivi en direct']
+    : ['🏃 Réveil des Ducs'];
 
   if (seenPoints[TOTAL_KM]) {
     lines.push(`🏁 Arrivée à ${secToHHMM(seenPoints[TOTAL_KM])} (km ${formatKm(TOTAL_KM)})`);
+    return lines.join('\n');
+  }
+  if (!inRace) {
+    // Hors fenêtre de course (J-X ou bien après l'arrivée non saisie)
+    const msUntil = timeUntilRaceStartMs();
+    if (msUntil > 0) {
+      const days  = Math.floor(msUntil / (24 * 3600 * 1000));
+      const hours = Math.floor((msUntil % (24 * 3600 * 1000)) / (3600 * 1000));
+      lines.push(days >= 1
+        ? `⏳ Départ dans ${days} jour${days > 1 ? 's' : ''} et ${hours}h`
+        : `⏳ Départ dans ${hours}h`);
+      lines.push(`📅 ${RACE_DATE_STR} · ${secToHHMM(DEPART_SEC)}`);
+    } else {
+      lines.push('Course terminée (heure d\'arrivée non saisie)');
+    }
     return lines.join('\n');
   }
   if (nowSec < DEPART_SEC) {
