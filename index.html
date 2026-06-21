@@ -1395,11 +1395,17 @@ let   DEPART_SEC         = DEFAULT_DEPART_SEC;  // ajustable (vagues toutes les 
 // Date du départ effectif. Permet de distinguer une session de test
 // (avant ou après le jour J) d'une utilisation en course réelle.
 const RACE_DATE_STR = '2026-06-27';
+// Fuseau horaire de la course (CEST = heure d'été française, UTC+2 en juin).
+// On force l'offset pour que la date du départ soit toujours interprétée comme
+// l'heure locale française, quel que soit le fuseau du téléphone qui consulte.
+const RACE_TZ_OFFSET = '+02:00';
 function raceStartMs() {
   const [y, m, d] = RACE_DATE_STR.split('-').map(Number);
-  const dt = new Date(y, m - 1, d, 0, 0, 0);
-  dt.setSeconds(DEPART_SEC);
-  return dt.getTime();
+  const hh = Math.floor(DEPART_SEC / 3600);
+  const mm = Math.floor((DEPART_SEC % 3600) / 60);
+  const iso = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+            + `T${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00${RACE_TZ_OFFSET}`;
+  return new Date(iso).getTime();
 }
 // Vrai pendant une fenêtre généreuse autour du départ (1h avant → 18h après).
 // Hors de cette fenêtre, les fonctions « live » renvoient une info
