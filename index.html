@@ -125,6 +125,38 @@
       vertical-align: middle;
     }
     .copy-status-btn:active { background: var(--accent2); color: var(--bg); }
+    /* Bouton toggle lecture seule : style identique à 📋 mais avec un
+       état actif coloré pour bien signaler qu'on est en mode visiteur. */
+    .readonly-toggle-btn {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.7rem;
+      cursor: pointer;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .readonly-toggle-btn.active {
+      background: rgba(245, 166, 35, 0.18);
+      color: var(--accent);
+      border-color: var(--accent);
+      font-weight: 600;
+    }
+    .readonly-toggle-btn:active { transform: scale(0.96); }
+
+    /* Mode lecture seule : on cache toutes les affordances d'édition.
+       Les boutons de consultation (📋 statut, 📢 se faire voir) restent
+       accessibles puisqu'ils n'altèrent pas les données partagées. */
+    body.is-readonly .list-actions,
+    body.is-readonly .btn-vu,
+    body.is-readonly .btn-edit-pause,
+    body.is-readonly .btn-delete-pause,
+    body.is-readonly .btn-delete-custom,
+    body.is-readonly .pp-delete,
+    body.is-readonly .pp-btn:not(.pp-sv):not(.pp-sat):not(.pp-gm),
+    body.is-readonly .admin-toggle { display: none !important; }
 
     /* LIST ACTIONS */
     .list-actions {
@@ -823,7 +855,7 @@
 <!-- TAB LISTE -->
 <div id="tab-list" class="tab-content active">
   <div class="info-bar">
-    <div>Objectif <b id="plan-target">70 km en 11h</b> · Arrivée <b id="est-arrival">~10h00</b><button type="button" class="copy-status-btn" onclick="copyStatus()" title="Copier le statut pour le partager">📋</button></div>
+    <div>Objectif <b id="plan-target">70 km en 11h</b> · Arrivée <b id="est-arrival">~10h00</b><button type="button" class="copy-status-btn" onclick="copyStatus()" title="Copier le statut pour le partager">📋</button><button type="button" class="readonly-toggle-btn" id="readonly-toggle-btn" onclick="toggleReadOnly()" title="Activer/désactiver le mode lecture seule">👁️</button></div>
     <div id="next-label" style="color:var(--accent2)"></div>
   </div>
   <div class="list-actions">
@@ -937,6 +969,10 @@
     <div class="modal-hint">💡 Pseudo inconnu = nouveau compte créé. Ton pseudo apparaîtra sur les passages que tu valides, et toi seul pourras les supprimer.</div>
     <div class="modal-btns">
       <button class="btn-confirm" id="login-confirm-btn" onclick="confirmLogin()">✓ Se connecter</button>
+    </div>
+    <div style="text-align:center;margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+      <button type="button" class="btn-cancel" style="font-size:0.85rem;padding:10px 16px" onclick="enterAsVisitor()">👁️ Continuer en visiteur (lecture seule)</button>
+      <div class="modal-hint" style="margin-top:6px">Pour juste voir les passages, sans risque de modifier quoi que ce soit.</div>
     </div>
   </div>
 </div>
@@ -2189,6 +2225,49 @@ async function copyStatus() {
   const text = buildStatusMessage();
   const ok   = await copyToClipboard(text);
   showToast(ok ? '📋 Statut copié — colle-le où tu veux' : 'Échec de la copie');
+}
+
+// ─── MODE LECTURE SEULE ──────────────────────────────────
+// Empêche toute édition côté UI. État persisté localStorage → un refresh
+// préserve le choix. Deux entrées possibles :
+// 1. Bouton « Visiteur » sur la modale login (utilisateur sans compte).
+// 2. Toggle dans l'info-bar (utilisateur loggué qui prête son téléphone).
+const READONLY_KEY = 'reveil-des-ducs:read-only';
+let isReadOnly = false;
+function loadReadOnly() {
+  isReadOnly = localStorage.getItem(READONLY_KEY) === '1';
+}
+function saveReadOnly() {
+  try {
+    if (isReadOnly) localStorage.setItem(READONLY_KEY, '1');
+    else            localStorage.removeItem(READONLY_KEY);
+  } catch (e) { /* ignore */ }
+}
+function applyReadOnly() {
+  document.body.classList.toggle('is-readonly', isReadOnly);
+  const btn = document.getElementById('readonly-toggle-btn');
+  if (btn) {
+    btn.classList.toggle('active', isReadOnly);
+    btn.textContent = isReadOnly ? '👁️ Lecture seule' : '👁️';
+    btn.title = isReadOnly
+      ? 'Lecture seule active — tap pour repasser en édition'
+      : 'Activer le mode lecture seule (empêche toute saisie)';
+  }
+}
+function toggleReadOnly() {
+  isReadOnly = !isReadOnly;
+  saveReadOnly();
+  applyReadOnly();
+  showToast(isReadOnly
+    ? '👁️ Lecture seule activée — aucune modification possible'
+    : '✏️ Édition réactivée');
+}
+function enterAsVisitor() {
+  isReadOnly = true;
+  saveReadOnly();
+  applyReadOnly();
+  closeLoginModal();
+  showToast('👁️ Mode visiteur — lecture seule');
 }
 
 // Met à jour le libellé d'objectif (info-bar) en fonction du plan courant.
@@ -3515,12 +3594,14 @@ async function bootstrap() {
   await loadGpxTrace();
   loadPointOverrides();        // overrides utilisateur prioritaires (drag récent)
   loadAccountFromStorage();    // session compte (pseudo + flag connecté)
+  loadReadOnly();              // état du toggle lecture seule
   loadPlan();                  // plan prévisionnel personnalisé
   loadSeenPoints();            // cache localStorage (offline fallback)
   loadPauses();                // cache localStorage des pauses ravito
   updateHeaderDeparture();     // header reflète l'éventuel departureHHMM du cache
   recalibrate();
   renderList();
+  applyReadOnly();             // masque les affordances d'édition si actif
 
   // Firebase : auth anonyme + listener temps réel
   // Le listener onSnapshot reconstruira seenPoints depuis Firestore
