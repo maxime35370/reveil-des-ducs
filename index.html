@@ -534,6 +534,28 @@
       background: rgba(245, 166, 35, 0.16);
       color: var(--accent);
     }
+    /* Palette de couleurs pour personnaliser la balise visuelle */
+    .visibility-color-row {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .visibility-color-btn {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      cursor: pointer;
+      padding: 0;
+      transition: transform 0.15s, border-color 0.15s;
+    }
+    .visibility-color-btn.active {
+      border-color: #fff;
+      border-width: 3px;
+      transform: scale(1.12);
+      box-shadow: 0 0 0 2px var(--accent2);
+    }
 
     #visibility-overlay {
       position: fixed;
@@ -548,7 +570,17 @@
     }
     #visibility-overlay.active { display: flex; }
     #visibility-overlay.mode-banner { background: #000; }
-    .visibility-banner-text {
+    /* Carrousel continu (marquee) : on duplique le contenu en deux moitiés
+       identiques côte à côte, on translate de -50% (= une moitié pile), et
+       quand l'animation reboucle elle reprend pile au même rendu visuel.
+       Aucun gap entre cycles, défilement perpétuel sans interruption. */
+    .visibility-banner-track {
+      display: flex;
+      width: max-content;
+      animation: vis-scroll 4s linear infinite;
+      will-change: transform;
+    }
+    .visibility-banner-half {
       white-space: nowrap;
       font-size: 35vh;
       line-height: 1;
@@ -556,12 +588,11 @@
       font-weight: 900;
       font-family: var(--display);
       letter-spacing: 0.04em;
-      animation: vis-scroll 4s linear infinite;
-      will-change: transform;
+      flex-shrink: 0;
     }
     @keyframes vis-scroll {
-      from { transform: translateX(100vw); }
-      to   { transform: translateX(-100%); }
+      from { transform: translateX(0); }
+      to   { transform: translateX(-50%); }
     }
     /* Sélecteur de vitesse de défilement (visible en mode banner) */
     .visibility-speed-row {
@@ -1026,9 +1057,11 @@
     <div class="modal-hint" style="margin-bottom:14px">Allume l'écran en grand pour que ton coureur te repère au passage. Pense aussi à monter la luminosité au max.</div>
     <div class="modal-label">Mode :</div>
     <div class="visibility-mode-row">
-      <button type="button" class="visibility-mode-btn active" data-mode="white" onclick="selectVisibilityMode('white')">🔆 Écran blanc</button>
+      <button type="button" class="visibility-mode-btn active" data-mode="white" onclick="selectVisibilityMode('white')">🔆 Écran plein</button>
       <button type="button" class="visibility-mode-btn" data-mode="banner" onclick="selectVisibilityMode('banner')">📣 Texte défilant</button>
     </div>
+    <div class="modal-label">Couleur (« c'est moi ! ») :</div>
+    <div class="visibility-color-row" id="visibility-color-row"></div>
     <div id="visibility-text-row" style="display:none">
       <div class="modal-label">Message à afficher (max 40 car.) :</div>
       <input type="text" id="visibility-text" class="modal-time-input" style="font-size:1rem" placeholder="ALLEZ MAX !" maxlength="40"/>
@@ -3525,22 +3558,55 @@ function showTab(name) {
 }
 
 // ─── SE FAIRE VOIR ───────────────────────────────────────
-// Plein écran blanc OU noir-avec-bandeau-défilant en paysage, pour
-// que le coureur repère son spectateur au passage. Wake Lock pour
-// que l'écran ne s'éteigne pas. Sortie : tap n'importe où.
+// Plein écran coloré OU noir-avec-bandeau-défilant (carrousel) en
+// paysage, pour que le coureur repère son spectateur au passage.
+// Wake Lock pour que l'écran ne s'éteigne pas. Sortie : tap n'importe où.
 const VISIBILITY_MODE_KEY  = 'reveil-des-ducs:visibility:mode';
 const VISIBILITY_TEXT_KEY  = 'reveil-des-ducs:visibility:text';
 const VISIBILITY_SPEED_KEY = 'reveil-des-ducs:visibility:speed';
+const VISIBILITY_COLOR_KEY = 'reveil-des-ducs:visibility:color';
 // Durées d'animation (secondes) — plus court = boucle plus rapide.
 const VISIBILITY_SPEEDS = { slow: 7, normal: 4, fast: 2 };
+// Palette : chaque spectateur peut choisir « sa » couleur, utilisable
+// comme signe distinctif (« je suis le rouge » p. ex.).
+const VISIBILITY_COLORS = [
+  { id: 'white',   hex: '#ffffff', label: 'Blanc' },
+  { id: 'red',     hex: '#ff2e2e', label: 'Rouge' },
+  { id: 'green',   hex: '#39ff14', label: 'Vert fluo' },
+  { id: 'yellow',  hex: '#ffd200', label: 'Jaune' },
+  { id: 'magenta', hex: '#ff2eb8', label: 'Magenta' },
+  { id: 'cyan',    hex: '#00e5ff', label: 'Cyan' },
+  { id: 'orange',  hex: '#ff7a1a', label: 'Orange' },
+];
 let visibilityWakeLock = null;
 let visibilityActive = false;
+
+function getVisibilityColor(id) {
+  return VISIBILITY_COLORS.find(c => c.id === id) || VISIBILITY_COLORS[0];
+}
+function buildVisibilityColorPalette() {
+  const row = document.getElementById('visibility-color-row');
+  if (!row || row.children.length) return;
+  row.innerHTML = VISIBILITY_COLORS.map(c => `
+    <button type="button" class="visibility-color-btn" data-color="${c.id}"
+            style="background:${c.hex}" title="${c.label}"
+            onclick="selectVisibilityColor('${c.id}')"></button>
+  `).join('');
+}
+function selectVisibilityColor(id) {
+  document.querySelectorAll('.visibility-color-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.color === id);
+  });
+}
 
 function openVisibilityModal() {
   const savedMode  = localStorage.getItem(VISIBILITY_MODE_KEY)  || 'white';
   const savedText  = localStorage.getItem(VISIBILITY_TEXT_KEY)  || '';
   const savedSpeed = localStorage.getItem(VISIBILITY_SPEED_KEY) || 'normal';
+  const savedColor = localStorage.getItem(VISIBILITY_COLOR_KEY) || 'white';
   document.getElementById('visibility-text').value = savedText;
+  buildVisibilityColorPalette();
+  selectVisibilityColor(savedColor);
   selectVisibilitySpeed(VISIBILITY_SPEEDS[savedSpeed] ? savedSpeed : 'normal');
   selectVisibilityMode(savedMode === 'banner' ? 'banner' : 'white');
   document.getElementById('modal-visibility').classList.add('open');
@@ -3565,26 +3631,44 @@ function escapeHtmlSafe(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 async function startVisibility() {
-  const mode = document.querySelector('.visibility-mode-btn.active')?.dataset.mode || 'white';
+  const mode    = document.querySelector('.visibility-mode-btn.active')?.dataset.mode  || 'white';
   const speedId = document.querySelector('.visibility-speed-btn.active')?.dataset.speed || 'normal';
+  const colorId = document.querySelector('.visibility-color-btn.active')?.dataset.color || 'white';
   const durationSec = VISIBILITY_SPEEDS[speedId] || VISIBILITY_SPEEDS.normal;
+  const color  = getVisibilityColor(colorId);
   const rawTxt = (document.getElementById('visibility-text').value || '').trim();
-  const text = rawTxt || 'ALLEZ !';
+  const text   = rawTxt || 'ALLEZ !';
   try {
     localStorage.setItem(VISIBILITY_MODE_KEY,  mode);
     localStorage.setItem(VISIBILITY_TEXT_KEY,  rawTxt);
     localStorage.setItem(VISIBILITY_SPEED_KEY, speedId);
+    localStorage.setItem(VISIBILITY_COLOR_KEY, colorId);
   } catch (e) { /* ignore */ }
 
   const overlay = document.getElementById('visibility-overlay');
   overlay.classList.remove('mode-white', 'mode-banner');
   overlay.classList.add('mode-' + mode);
   if (mode === 'banner') {
+    // Carrousel marquee : on construit chaque moitié avec assez de
+    // répétitions pour couvrir au moins 1,8 viewport, puis on duplique
+    // la moitié à l'identique pour que translate -50% reboucle sans
+    // transition visible.
+    overlay.style.background = '#000';
+    const escaped = escapeHtmlSafe(text);
+    const sep = '  •  ';
+    const estCharVw = 18;
+    const targetVw  = 180;
+    const repeats   = Math.max(3, Math.ceil(targetVw / Math.max(1, text.length * estCharVw)));
+    const half      = (escaped + sep).repeat(repeats);
     overlay.innerHTML = `
-      <div class="visibility-banner-text" style="animation-duration:${durationSec}s">${escapeHtmlSafe(text)} &nbsp;·&nbsp; ${escapeHtmlSafe(text)}</div>
+      <div class="visibility-banner-track" style="animation-duration:${durationSec}s; color:${color.hex}">
+        <div class="visibility-banner-half" style="color:${color.hex}">${half}</div>
+        <div class="visibility-banner-half" style="color:${color.hex}">${half}</div>
+      </div>
       <button class="visibility-exit" onclick="event.stopPropagation(); stopVisibility()">✕ Sortir</button>
     `;
   } else {
+    overlay.style.background = color.hex;
     overlay.innerHTML = `
       <button class="visibility-exit" onclick="event.stopPropagation(); stopVisibility()">✕ Sortir</button>
     `;
@@ -3617,6 +3701,7 @@ async function stopVisibility() {
   visibilityActive = false;
   const overlay = document.getElementById('visibility-overlay');
   overlay.classList.remove('active', 'mode-white', 'mode-banner');
+  overlay.style.background = '';   // reset l'inline color appliqué au start
   overlay.innerHTML = '';
   try { if (visibilityWakeLock) { await visibilityWakeLock.release(); visibilityWakeLock = null; } } catch (e) {}
   try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (e) {}
