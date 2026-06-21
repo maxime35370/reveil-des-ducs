@@ -556,12 +556,34 @@
       font-weight: 900;
       font-family: var(--display);
       letter-spacing: 0.04em;
-      animation: vis-scroll 9s linear infinite;
+      animation: vis-scroll 4s linear infinite;
       will-change: transform;
     }
     @keyframes vis-scroll {
       from { transform: translateX(100vw); }
       to   { transform: translateX(-100%); }
+    }
+    /* Sélecteur de vitesse de défilement (visible en mode banner) */
+    .visibility-speed-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .visibility-speed-btn {
+      flex: 1;
+      padding: 8px 6px;
+      background: var(--surface2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      cursor: pointer;
+    }
+    .visibility-speed-btn.active {
+      border-color: var(--accent);
+      background: rgba(245, 166, 35, 0.16);
+      color: var(--accent);
     }
     .visibility-exit {
       position: absolute;
@@ -1010,6 +1032,12 @@
     <div id="visibility-text-row" style="display:none">
       <div class="modal-label">Message à afficher (max 40 car.) :</div>
       <input type="text" id="visibility-text" class="modal-time-input" style="font-size:1rem" placeholder="ALLEZ MAX !" maxlength="40"/>
+      <div class="modal-label">Vitesse de défilement :</div>
+      <div class="visibility-speed-row">
+        <button type="button" class="visibility-speed-btn" data-speed="slow"   onclick="selectVisibilitySpeed('slow')">🐢 Lent</button>
+        <button type="button" class="visibility-speed-btn active" data-speed="normal" onclick="selectVisibilitySpeed('normal')">⏱️ Normal</button>
+        <button type="button" class="visibility-speed-btn" data-speed="fast"   onclick="selectVisibilitySpeed('fast')">⚡ Rapide</button>
+      </div>
     </div>
     <div class="modal-hint">💡 Plein écran + paysage forcé. Tap n'importe où sur l'écran pour sortir.</div>
     <div class="modal-btns">
@@ -3500,15 +3528,20 @@ function showTab(name) {
 // Plein écran blanc OU noir-avec-bandeau-défilant en paysage, pour
 // que le coureur repère son spectateur au passage. Wake Lock pour
 // que l'écran ne s'éteigne pas. Sortie : tap n'importe où.
-const VISIBILITY_MODE_KEY = 'reveil-des-ducs:visibility:mode';
-const VISIBILITY_TEXT_KEY = 'reveil-des-ducs:visibility:text';
+const VISIBILITY_MODE_KEY  = 'reveil-des-ducs:visibility:mode';
+const VISIBILITY_TEXT_KEY  = 'reveil-des-ducs:visibility:text';
+const VISIBILITY_SPEED_KEY = 'reveil-des-ducs:visibility:speed';
+// Durées d'animation (secondes) — plus court = boucle plus rapide.
+const VISIBILITY_SPEEDS = { slow: 7, normal: 4, fast: 2 };
 let visibilityWakeLock = null;
 let visibilityActive = false;
 
 function openVisibilityModal() {
-  const savedMode = localStorage.getItem(VISIBILITY_MODE_KEY) || 'white';
-  const savedText = localStorage.getItem(VISIBILITY_TEXT_KEY) || '';
+  const savedMode  = localStorage.getItem(VISIBILITY_MODE_KEY)  || 'white';
+  const savedText  = localStorage.getItem(VISIBILITY_TEXT_KEY)  || '';
+  const savedSpeed = localStorage.getItem(VISIBILITY_SPEED_KEY) || 'normal';
   document.getElementById('visibility-text').value = savedText;
+  selectVisibilitySpeed(VISIBILITY_SPEEDS[savedSpeed] ? savedSpeed : 'normal');
   selectVisibilityMode(savedMode === 'banner' ? 'banner' : 'white');
   document.getElementById('modal-visibility').classList.add('open');
 }
@@ -3521,6 +3554,11 @@ function selectVisibilityMode(mode) {
   });
   document.getElementById('visibility-text-row').style.display = mode === 'banner' ? '' : 'none';
 }
+function selectVisibilitySpeed(speed) {
+  document.querySelectorAll('.visibility-speed-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.speed === speed);
+  });
+}
 function escapeHtmlSafe(s) {
   return String(s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -3528,11 +3566,14 @@ function escapeHtmlSafe(s) {
 }
 async function startVisibility() {
   const mode = document.querySelector('.visibility-mode-btn.active')?.dataset.mode || 'white';
+  const speedId = document.querySelector('.visibility-speed-btn.active')?.dataset.speed || 'normal';
+  const durationSec = VISIBILITY_SPEEDS[speedId] || VISIBILITY_SPEEDS.normal;
   const rawTxt = (document.getElementById('visibility-text').value || '').trim();
   const text = rawTxt || 'ALLEZ !';
   try {
-    localStorage.setItem(VISIBILITY_MODE_KEY, mode);
-    localStorage.setItem(VISIBILITY_TEXT_KEY, rawTxt);
+    localStorage.setItem(VISIBILITY_MODE_KEY,  mode);
+    localStorage.setItem(VISIBILITY_TEXT_KEY,  rawTxt);
+    localStorage.setItem(VISIBILITY_SPEED_KEY, speedId);
   } catch (e) { /* ignore */ }
 
   const overlay = document.getElementById('visibility-overlay');
@@ -3540,7 +3581,7 @@ async function startVisibility() {
   overlay.classList.add('mode-' + mode);
   if (mode === 'banner') {
     overlay.innerHTML = `
-      <div class="visibility-banner-text">${escapeHtmlSafe(text)} &nbsp;·&nbsp; ${escapeHtmlSafe(text)}</div>
+      <div class="visibility-banner-text" style="animation-duration:${durationSec}s">${escapeHtmlSafe(text)} &nbsp;·&nbsp; ${escapeHtmlSafe(text)}</div>
       <button class="visibility-exit" onclick="event.stopPropagation(); stopVisibility()">✕ Sortir</button>
     `;
   } else {
