@@ -113,6 +113,18 @@
       flex-shrink: 0;
     }
     .info-bar b { color: var(--text); }
+    .copy-status-btn {
+      background: transparent;
+      color: var(--accent2);
+      border: 1px solid var(--border);
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.7rem;
+      cursor: pointer;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+    .copy-status-btn:active { background: var(--accent2); color: var(--bg); }
 
     /* LIST ACTIONS */
     .list-actions {
@@ -719,7 +731,7 @@
 <!-- TAB LISTE -->
 <div id="tab-list" class="tab-content active">
   <div class="info-bar">
-    <div>Objectif <b id="plan-target">70 km en 11h</b> · Arrivée <b id="est-arrival">~10h00</b></div>
+    <div>Objectif <b id="plan-target">70 km en 11h</b> · Arrivée <b id="est-arrival">~10h00</b><button type="button" class="copy-status-btn" onclick="copyStatus()" title="Copier le statut pour le partager">📋</button></div>
     <div id="next-label" style="color:var(--accent2)"></div>
   </div>
   <div class="list-actions">
@@ -1948,6 +1960,74 @@ function recalibrate() {
   // Chip header : on affiche l'allure moyenne (référence stable),
   // pas la projection courante qui peut être assez volatile.
   document.getElementById('pace-chip').textContent = formatPace(overallPace);
+}
+
+// ─── STATUT PARTAGEABLE (Whatsapp / SMS) ─────────────────
+// Construit un message court résumant la situation courante :
+// position estimée, allure, ETA, avance/retard, pauses. Utilisé par
+// le bouton 📋 dans l'info-bar pour copier dans le presse-papier.
+function buildStatusMessage() {
+  const nowSec = nowSecOfDay();
+  const seen = Object.entries(seenPoints)
+    .map(([k, v]) => ({ km: parseFloat(k), sec: v }))
+    .filter(p => Number.isFinite(p.km) && Number.isFinite(p.sec))
+    .sort((a, b) => a.km - b.km);
+  const lines = ['🏃 Réveil des Ducs · suivi en direct'];
+
+  if (seenPoints[TOTAL_KM]) {
+    lines.push(`🏁 Arrivée à ${secToHHMM(seenPoints[TOTAL_KM])} (km ${formatKm(TOTAL_KM)})`);
+    return lines.join('\n');
+  }
+  if (nowSec < DEPART_SEC) {
+    const mins = Math.ceil((DEPART_SEC - nowSec) / 60);
+    lines.push(`⏳ Départ dans ${mins} min (${secToHHMM(DEPART_SEC)})`);
+    return lines.join('\n');
+  }
+
+  // Position estimée à l'instant T (utilise currentPace, donc allure récente
+  // si dispo). On affiche aussi le dernier passage réel comme repère.
+  const estKm = estimateRunnerKm(nowSec);
+  if (estKm != null) {
+    lines.push(`📍 ~km ${formatKm(estKm)} à ${secToHHMM(nowSec)}`);
+  } else {
+    lines.push(`📍 En course · ${secToHHMM(nowSec)}`);
+  }
+  if (seen.length) {
+    const last = seen[seen.length - 1];
+    lines.push(`🏁 Dernier passage : km ${formatKm(last.km)} à ${secToHHMM(last.sec)}`);
+    const overall = Math.max(1, last.sec - DEPART_SEC - pauseTimeUpTo(last.sec)) / last.km;
+    const recent  = recentRunningPace(5);
+    if (recent != null) {
+      const diff = recent - overall;
+      const ind = diff < -10 ? ' ↑' : (diff > 10 ? ' ↓' : '');
+      lines.push(`⚡ Allure ${formatPace(overall)} (récent ${formatPace(recent)}${ind})`);
+    } else {
+      lines.push(`⚡ Allure ${formatPace(overall)}`);
+    }
+  }
+
+  const finishSec  = estSec(TOTAL_KM);
+  const plannedSec = plannedArrivalSec + totalRecordedPauseSec();
+  const delta      = finishSec - plannedSec;
+  let deltaTxt = '';
+  if (Math.abs(delta) < 30)        deltaTxt = ' (dans les temps)';
+  else if (delta < 0)              deltaTxt = ` (${Math.round(-delta / 60)} min d'avance)`;
+  else                             deltaTxt = ` (${Math.round(delta / 60)} min de retard)`;
+  lines.push(`🎯 Arrivée Port de Vannes ~${secToHHMM(finishSec)}${deltaTxt}`);
+
+  const completePauses = Object.values(pauses)
+    .filter(p => Number.isFinite(p.startSec) && Number.isFinite(p.endSec));
+  if (completePauses.length) {
+    const totalMin = Math.round(completePauses.reduce((s, p) => s + (p.endSec - p.startSec), 0) / 60);
+    lines.push(`⏸️ ${completePauses.length} pause${completePauses.length > 1 ? 's' : ''} · ${totalMin} min cumulées`);
+  }
+
+  return lines.join('\n');
+}
+async function copyStatus() {
+  const text = buildStatusMessage();
+  const ok   = await copyToClipboard(text);
+  showToast(ok ? '📋 Statut copié — colle-le où tu veux' : 'Échec de la copie');
 }
 
 // Met à jour le libellé d'objectif (info-bar) en fonction du plan courant.
