@@ -724,7 +724,7 @@
   </div>
   <div class="list-actions">
     <button type="button" class="list-action-btn" onclick="openCustomModal()">➕ Passage (live)</button>
-    <button type="button" class="list-action-btn" onclick="openPauseModal()">⏸️ Pause ravito</button>
+    <button type="button" class="list-action-btn" onclick="openPauseModal()">⏸️ Pause</button>
     <button type="button" class="list-action-btn" onclick="openOfficialRavitoModal()" title="Ajouter un point officiel (entrée/sortie à remplir plus tard)">📍 Ravito officiel</button>
     <button type="button" class="list-action-btn" onclick="openSettingsModal()" title="Régler l'heure d'arrivée prévue et le rythme de base">⚙️ Plan</button>
     <button type="button" class="list-action-btn danger" onclick="clearAllSeenPoints()" title="Effacer tous les passages et pauses">🗑️</button>
@@ -795,7 +795,7 @@
 <div class="modal-overlay" id="modal-pause">
   <div class="modal-box">
     <div class="modal-handle"></div>
-    <div class="modal-km" id="modal-pause-title">⏸️ Pause ravito</div>
+    <div class="modal-km" id="modal-pause-title">⏸️ Pause</div>
     <div id="modal-pause-label-row" style="display:none">
       <div class="modal-label">Label (ex « Ravito Saint-Colombier ») :</div>
       <input type="text" class="modal-time-input" id="modal-pause-label" placeholder="optionnel" style="font-size:1rem"/>
@@ -2035,7 +2035,7 @@ function buildPauseRowHtml(p) {
   const kmLabel = (p.km != null && Number.isFinite(p.km))
     ? `km ${formatKm(p.km)} · `
     : '';
-  const labelTxt  = (p.label && p.label.trim()) ? p.label.trim() : (isOfficial ? 'Ravito officiel' : 'Pause ravito');
+  const labelTxt  = (p.label && p.label.trim()) ? p.label.trim() : (isOfficial ? 'Ravito officiel' : 'Pause');
   const hasStart  = Number.isFinite(p.startSec);
   const hasEnd    = Number.isFinite(p.endSec);
   const dur       = (hasStart && hasEnd) ? pauseDurationMin(p) : null;
@@ -2368,7 +2368,7 @@ function applyPauseModalMode(isOfficial) {
     if (kmLb)    kmLb.textContent    = 'Kilomètre du ravito :';
     if (hintEl)  hintEl.innerHTML    = '💡 Tu peux enregistrer un point officiel avec juste le km, et compléter les heures plus tard (depuis Livetrail). À l\'ajout de l\'heure d\'entrée, un passage est créé automatiquement pour affiner les projections.';
   } else {
-    if (titleEl) titleEl.textContent = '⏸️ Pause ravito';
+    if (titleEl) titleEl.textContent = '⏸️ Pause';
     if (startLb) startLb.textContent = 'Heure d\'arrêt (HH:MM) :';
     if (endLb)   endLb.textContent   = 'Heure de reprise (HH:MM) :';
     if (kmLb)    kmLb.textContent    = 'Kilomètre du ravito (optionnel) :';
@@ -2972,7 +2972,7 @@ function buildPauseIcon(p) {
 
 function buildPausePopup(p) {
   const isOfficial = !!p.official;
-  const labelTxt = (p.label && p.label.trim()) ? p.label.trim() : (isOfficial ? 'Ravito officiel' : 'Pause ravito');
+  const labelTxt = (p.label && p.label.trim()) ? p.label.trim() : (isOfficial ? 'Ravito officiel' : 'Pause');
   const auth   = p.authorName ? ` · ${p.authorName}` : '';
   const hasStart = Number.isFinite(p.startSec);
   const hasEnd   = Number.isFinite(p.endSec);
