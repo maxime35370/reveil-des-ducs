@@ -502,6 +502,28 @@
       background: rgba(245, 166, 35, 0.16);
       color: var(--accent);
     }
+    /* Palette de couleurs pour personnaliser la balise visuelle */
+    .visibility-color-row {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .visibility-color-btn {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      cursor: pointer;
+      padding: 0;
+      transition: transform 0.15s, border-color 0.15s;
+    }
+    .visibility-color-btn.active {
+      border-color: #fff;
+      border-width: 3px;
+      transform: scale(1.12);
+      box-shadow: 0 0 0 2px var(--accent2);
+    }
 
     #visibility-overlay {
       position: fixed;
@@ -968,9 +990,11 @@
     <div class="modal-hint" style="margin-bottom:14px">Allume l'écran en grand pour que ton coureur te repère au passage. Pense aussi à monter la luminosité au max.</div>
     <div class="modal-label">Mode :</div>
     <div class="visibility-mode-row">
-      <button type="button" class="visibility-mode-btn active" data-mode="white" onclick="selectVisibilityMode('white')">🔆 Écran blanc</button>
+      <button type="button" class="visibility-mode-btn active" data-mode="white" onclick="selectVisibilityMode('white')">🔆 Écran plein</button>
       <button type="button" class="visibility-mode-btn" data-mode="banner" onclick="selectVisibilityMode('banner')">📣 Texte défilant</button>
     </div>
+    <div class="modal-label">Couleur (« c'est moi ! ») :</div>
+    <div class="visibility-color-row" id="visibility-color-row"></div>
     <div id="visibility-text-row" style="display:none">
       <div class="modal-label">Message à afficher (max 40 car.) :</div>
       <input type="text" id="visibility-text" class="modal-time-input" style="font-size:1rem" placeholder="ALLEZ MAX !" maxlength="40"/>
@@ -3378,18 +3402,50 @@ function showTab(name) {
 }
 
 // ─── SE FAIRE VOIR ───────────────────────────────────────
-// Plein écran blanc OU noir-avec-bandeau-défilant en paysage, pour
+// Plein écran coloré OU noir-avec-bandeau-défilant en paysage, pour
 // que le coureur repère son spectateur au passage. Wake Lock pour
 // que l'écran ne s'éteigne pas. Sortie : tap n'importe où.
-const VISIBILITY_MODE_KEY = 'reveil-des-ducs:visibility:mode';
-const VISIBILITY_TEXT_KEY = 'reveil-des-ducs:visibility:text';
+const VISIBILITY_MODE_KEY  = 'reveil-des-ducs:visibility:mode';
+const VISIBILITY_TEXT_KEY  = 'reveil-des-ducs:visibility:text';
+const VISIBILITY_COLOR_KEY = 'reveil-des-ducs:visibility:color';
 let visibilityWakeLock = null;
 let visibilityActive = false;
+// Palette : chaque spectateur peut choisir « sa » couleur, utilisable
+// comme signe distinctif (« je suis le rouge » p. ex.).
+const VISIBILITY_COLORS = [
+  { id: 'white',   hex: '#ffffff', label: 'Blanc' },
+  { id: 'red',     hex: '#ff2e2e', label: 'Rouge' },
+  { id: 'green',   hex: '#39ff14', label: 'Vert fluo' },
+  { id: 'yellow',  hex: '#ffd200', label: 'Jaune' },
+  { id: 'magenta', hex: '#ff2eb8', label: 'Magenta' },
+  { id: 'cyan',    hex: '#00e5ff', label: 'Cyan' },
+  { id: 'orange',  hex: '#ff7a1a', label: 'Orange' },
+];
+function getVisibilityColor(id) {
+  return VISIBILITY_COLORS.find(c => c.id === id) || VISIBILITY_COLORS[0];
+}
+function buildVisibilityColorPalette() {
+  const row = document.getElementById('visibility-color-row');
+  if (!row || row.children.length) return;  // déjà construite
+  row.innerHTML = VISIBILITY_COLORS.map(c => `
+    <button type="button" class="visibility-color-btn" data-color="${c.id}"
+            style="background:${c.hex}" title="${c.label}"
+            onclick="selectVisibilityColor('${c.id}')"></button>
+  `).join('');
+}
+function selectVisibilityColor(id) {
+  document.querySelectorAll('.visibility-color-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.color === id);
+  });
+}
 
 function openVisibilityModal() {
-  const savedMode = localStorage.getItem(VISIBILITY_MODE_KEY) || 'white';
-  const savedText = localStorage.getItem(VISIBILITY_TEXT_KEY) || '';
+  const savedMode  = localStorage.getItem(VISIBILITY_MODE_KEY)  || 'white';
+  const savedText  = localStorage.getItem(VISIBILITY_TEXT_KEY)  || '';
+  const savedColor = localStorage.getItem(VISIBILITY_COLOR_KEY) || 'white';
   document.getElementById('visibility-text').value = savedText;
+  buildVisibilityColorPalette();
+  selectVisibilityColor(savedColor);
   selectVisibilityMode(savedMode === 'banner' ? 'banner' : 'white');
   document.getElementById('modal-visibility').classList.add('open');
 }
@@ -3408,23 +3464,30 @@ function escapeHtmlSafe(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 async function startVisibility() {
-  const mode = document.querySelector('.visibility-mode-btn.active')?.dataset.mode || 'white';
-  const rawTxt = (document.getElementById('visibility-text').value || '').trim();
-  const text = rawTxt || 'ALLEZ !';
+  const mode    = document.querySelector('.visibility-mode-btn.active')?.dataset.mode || 'white';
+  const colorId = document.querySelector('.visibility-color-btn.active')?.dataset.color || 'white';
+  const color   = getVisibilityColor(colorId);
+  const rawTxt  = (document.getElementById('visibility-text').value || '').trim();
+  const text    = rawTxt || 'ALLEZ !';
   try {
-    localStorage.setItem(VISIBILITY_MODE_KEY, mode);
-    localStorage.setItem(VISIBILITY_TEXT_KEY, rawTxt);
+    localStorage.setItem(VISIBILITY_MODE_KEY,  mode);
+    localStorage.setItem(VISIBILITY_TEXT_KEY,  rawTxt);
+    localStorage.setItem(VISIBILITY_COLOR_KEY, colorId);
   } catch (e) { /* ignore */ }
 
   const overlay = document.getElementById('visibility-overlay');
   overlay.classList.remove('mode-white', 'mode-banner');
   overlay.classList.add('mode-' + mode);
   if (mode === 'banner') {
+    // Texte coloré sur fond noir
+    overlay.style.background = '#000';
     overlay.innerHTML = `
-      <div class="visibility-banner-text">${escapeHtmlSafe(text)} &nbsp;·&nbsp; ${escapeHtmlSafe(text)}</div>
+      <div class="visibility-banner-text" style="color:${color.hex}">${escapeHtmlSafe(text)} &nbsp;·&nbsp; ${escapeHtmlSafe(text)}</div>
       <button class="visibility-exit" onclick="event.stopPropagation(); stopVisibility()">✕ Sortir</button>
     `;
   } else {
+    // Fond plein dans la couleur choisie
+    overlay.style.background = color.hex;
     overlay.innerHTML = `
       <button class="visibility-exit" onclick="event.stopPropagation(); stopVisibility()">✕ Sortir</button>
     `;
@@ -3457,6 +3520,7 @@ async function stopVisibility() {
   visibilityActive = false;
   const overlay = document.getElementById('visibility-overlay');
   overlay.classList.remove('active', 'mode-white', 'mode-banner');
+  overlay.style.background = '';   // reset l'inline color appliqué au start
   overlay.innerHTML = '';
   try { if (visibilityWakeLock) { await visibilityWakeLock.release(); visibilityWakeLock = null; } } catch (e) {}
   try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (e) {}
