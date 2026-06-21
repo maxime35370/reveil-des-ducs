@@ -457,6 +457,98 @@
     }
     .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+    /* SE FAIRE VOIR — FAB + overlay plein écran */
+    .visibility-fab {
+      position: fixed;
+      bottom: 18px;
+      right: 18px;
+      width: 54px;
+      height: 54px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      font-size: 1.4rem;
+      cursor: pointer;
+      z-index: 8000;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .visibility-fab:active { transform: scale(0.94); }
+
+    .visibility-mode-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    .visibility-mode-btn {
+      flex: 1;
+      padding: 14px 8px;
+      background: var(--surface2);
+      color: var(--text);
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      cursor: pointer;
+      line-height: 1.3;
+    }
+    .visibility-mode-btn.active {
+      border-color: var(--accent);
+      background: rgba(245, 166, 35, 0.16);
+      color: var(--accent);
+    }
+
+    #visibility-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 99999;
+      background: #fff;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      cursor: pointer;
+    }
+    #visibility-overlay.active { display: flex; }
+    #visibility-overlay.mode-banner { background: #000; }
+    .visibility-banner-text {
+      white-space: nowrap;
+      font-size: 35vh;
+      line-height: 1;
+      color: #fff;
+      font-weight: 900;
+      font-family: var(--display);
+      letter-spacing: 0.04em;
+      animation: vis-scroll 9s linear infinite;
+      will-change: transform;
+    }
+    @keyframes vis-scroll {
+      from { transform: translateX(100vw); }
+      to   { transform: translateX(-100%); }
+    }
+    .visibility-exit {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      padding: 8px 14px;
+      border-radius: 20px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-family: var(--mono);
+      z-index: 100000;
+    }
+    #visibility-overlay.mode-white .visibility-exit {
+      background: rgba(0, 0, 0, 0.75);
+      border-color: rgba(255, 255, 255, 0.4);
+    }
     /* POPUP MARKER */
     .point-popup { font-family: var(--mono); color: #1a1a1a; min-width: 170px; }
     .point-popup .pp-title { font-weight: 600; font-size: 0.82rem; margin-bottom: 3px; }
@@ -771,6 +863,12 @@
 
 <div class="toast" id="toast"></div>
 
+<!-- BOUTON FLOTTANT : SE FAIRE VOIR -->
+<button type="button" class="visibility-fab" onclick="openVisibilityModal()" title="Se faire voir par le coureur">📢</button>
+
+<!-- OVERLAY PLEIN ÉCRAN : SE FAIRE VOIR -->
+<div id="visibility-overlay" onclick="stopVisibility()"></div>
+
 <!-- MODAL -->
 <div class="modal-overlay" id="modal">
   <div class="modal-box">
@@ -858,6 +956,29 @@
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeSettingsModal()">Annuler</button>
       <button class="btn-confirm" onclick="confirmSettings()">✓ Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL SE FAIRE VOIR -->
+<div class="modal-overlay" id="modal-visibility">
+  <div class="modal-box">
+    <div class="modal-handle"></div>
+    <div class="modal-km">📢 Se faire voir</div>
+    <div class="modal-hint" style="margin-bottom:14px">Allume l'écran en grand pour que ton coureur te repère au passage. Pense aussi à monter la luminosité au max.</div>
+    <div class="modal-label">Mode :</div>
+    <div class="visibility-mode-row">
+      <button type="button" class="visibility-mode-btn active" data-mode="white" onclick="selectVisibilityMode('white')">🔆 Écran blanc</button>
+      <button type="button" class="visibility-mode-btn" data-mode="banner" onclick="selectVisibilityMode('banner')">📣 Texte défilant</button>
+    </div>
+    <div id="visibility-text-row" style="display:none">
+      <div class="modal-label">Message à afficher (max 40 car.) :</div>
+      <input type="text" id="visibility-text" class="modal-time-input" style="font-size:1rem" placeholder="ALLEZ MAX !" maxlength="40"/>
+    </div>
+    <div class="modal-hint">💡 Plein écran + paysage forcé. Tap n'importe où sur l'écran pour sortir.</div>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeVisibilityModal()">Annuler</button>
+      <button class="btn-confirm" onclick="startVisibility()">🚦 Activer</button>
     </div>
   </div>
 </div>
@@ -3255,6 +3376,99 @@ function showTab(name) {
     renderChart();
   }
 }
+
+// ─── SE FAIRE VOIR ───────────────────────────────────────
+// Plein écran blanc OU noir-avec-bandeau-défilant en paysage, pour
+// que le coureur repère son spectateur au passage. Wake Lock pour
+// que l'écran ne s'éteigne pas. Sortie : tap n'importe où.
+const VISIBILITY_MODE_KEY = 'reveil-des-ducs:visibility:mode';
+const VISIBILITY_TEXT_KEY = 'reveil-des-ducs:visibility:text';
+let visibilityWakeLock = null;
+let visibilityActive = false;
+
+function openVisibilityModal() {
+  const savedMode = localStorage.getItem(VISIBILITY_MODE_KEY) || 'white';
+  const savedText = localStorage.getItem(VISIBILITY_TEXT_KEY) || '';
+  document.getElementById('visibility-text').value = savedText;
+  selectVisibilityMode(savedMode === 'banner' ? 'banner' : 'white');
+  document.getElementById('modal-visibility').classList.add('open');
+}
+function closeVisibilityModal() {
+  document.getElementById('modal-visibility').classList.remove('open');
+}
+function selectVisibilityMode(mode) {
+  document.querySelectorAll('.visibility-mode-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  document.getElementById('visibility-text-row').style.display = mode === 'banner' ? '' : 'none';
+}
+function escapeHtmlSafe(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+async function startVisibility() {
+  const mode = document.querySelector('.visibility-mode-btn.active')?.dataset.mode || 'white';
+  const rawTxt = (document.getElementById('visibility-text').value || '').trim();
+  const text = rawTxt || 'ALLEZ !';
+  try {
+    localStorage.setItem(VISIBILITY_MODE_KEY, mode);
+    localStorage.setItem(VISIBILITY_TEXT_KEY, rawTxt);
+  } catch (e) { /* ignore */ }
+
+  const overlay = document.getElementById('visibility-overlay');
+  overlay.classList.remove('mode-white', 'mode-banner');
+  overlay.classList.add('mode-' + mode);
+  if (mode === 'banner') {
+    overlay.innerHTML = `
+      <div class="visibility-banner-text">${escapeHtmlSafe(text)} &nbsp;·&nbsp; ${escapeHtmlSafe(text)}</div>
+      <button class="visibility-exit" onclick="event.stopPropagation(); stopVisibility()">✕ Sortir</button>
+    `;
+  } else {
+    overlay.innerHTML = `
+      <button class="visibility-exit" onclick="event.stopPropagation(); stopVisibility()">✕ Sortir</button>
+    `;
+  }
+  overlay.classList.add('active');
+  visibilityActive = true;
+  closeVisibilityModal();
+
+  // Plein écran + verrouillage paysage (mobile). Best-effort, ignore les
+  // refus du navigateur (Safari iOS notamment).
+  try {
+    if (document.documentElement.requestFullscreen) {
+      await document.documentElement.requestFullscreen();
+    }
+  } catch (e) { /* ignore */ }
+  try {
+    if (screen.orientation && screen.orientation.lock) {
+      await screen.orientation.lock('landscape');
+    }
+  } catch (e) { /* ignore */ }
+  // Empêche l'écran de s'éteindre tant que le mode est actif.
+  try {
+    if (navigator.wakeLock && navigator.wakeLock.request) {
+      visibilityWakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch (e) { /* ignore */ }
+}
+async function stopVisibility() {
+  if (!visibilityActive) return;
+  visibilityActive = false;
+  const overlay = document.getElementById('visibility-overlay');
+  overlay.classList.remove('active', 'mode-white', 'mode-banner');
+  overlay.innerHTML = '';
+  try { if (visibilityWakeLock) { await visibilityWakeLock.release(); visibilityWakeLock = null; } } catch (e) {}
+  try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (e) {}
+  try { if (document.fullscreenElement) await document.exitFullscreen(); } catch (e) {}
+}
+// Libère le wake lock si l'app passe en arrière-plan (économie batterie).
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && visibilityWakeLock) {
+    visibilityWakeLock.release().catch(() => {});
+    visibilityWakeLock = null;
+  }
+});
 
 // ─── INIT ────────────────────────────────────────────────
 async function bootstrap() {
