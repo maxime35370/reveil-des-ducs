@@ -2518,8 +2518,9 @@ function renderChart() {
 }
 
 // Graphique « Progression » : km parcourus (% du total) en ordonnée,
-// heure absolue en abscisse (22h30 → 11h le lendemain). Permet de voir
-// d'un coup d'œil si le coureur est en avance ou en retard sur le plan.
+// heure absolue en abscisse. Fenêtre dynamique : 15 min avant le départ
+// → 15 min après l'arrivée estimée (qui bouge au fil des passages et
+// pauses enregistrés).
 function renderProgressChart() {
   const container = document.getElementById('progress-chart');
   if (!container) return;
@@ -2529,10 +2530,12 @@ function renderProgressChart() {
     .filter(p => Number.isFinite(p.km) && Number.isFinite(p.sec))
     .sort((a, b) => a.sec - b.sec);
 
-  // Fenêtre fixe pour couvrir toutes les vagues + tous les rythmes.
-  const X_START = 22 * 3600 + 30 * 60;          // 22h30
-  const X_END   = 11 * 3600 + 86400;            // 11h00 le lendemain
-  const xRange  = X_END - X_START;
+  // Fenêtre dynamique recalculée à chaque rendu.
+  const planEndSec   = plannedArrivalSec + totalRecordedPauseSec();
+  const estFinishSec = estSec(TOTAL_KM);
+  const X_START = DEPART_SEC - 15 * 60;
+  const X_END   = Math.max(planEndSec, estFinishSec) + 15 * 60;
+  const xRange  = Math.max(1, X_END - X_START);
 
   const W = 820, H = 360;
   const padL = 60, padR = 60, padT = 50, padB = 44;
@@ -2554,10 +2557,12 @@ function renderProgressChart() {
     `;
   }).join('');
 
-  // Graduations X : toutes les 2h, format HHh
-  const xTickStep = 2 * 3600;
+  // Graduations X : 1h ou 2h selon la largeur de la fenêtre, alignées
+  // sur les heures rondes pour éviter les labels du genre « 22h47 ».
+  const xTickStep   = xRange > 6 * 3600 ? 2 * 3600 : 3600;
+  const firstHour   = Math.ceil(X_START / 3600) * 3600;
   const xTicks = [];
-  for (let t = X_START; t <= X_END; t += xTickStep) xTicks.push(t);
+  for (let t = firstHour; t <= X_END; t += xTickStep) xTicks.push(t);
   const formatHourLabel = sec => `${String(Math.floor((sec % 86400) / 3600)).padStart(2,'0')}h`;
   const xGrid = xTicks.map(t => `
     <line x1="${xScale(t)}" x2="${xScale(t)}" y1="${padT}" y2="${padT + plotH + 5}" stroke="#1e2d42" stroke-dasharray="2 4"/>
@@ -2569,11 +2574,8 @@ function renderProgressChart() {
   `;
 
   // Ligne objectif : (DEPART_SEC, 0%) → (arrivée prévue + pauses enregistrées, 100%)
-  const planEndSec = plannedArrivalSec + totalRecordedPauseSec();
-  const x0 = Math.max(X_START, Math.min(X_END, DEPART_SEC));
-  const x1 = Math.max(X_START, Math.min(X_END, planEndSec));
   const targetLine = `
-    <line x1="${xScale(x0)}" x2="${xScale(x1)}" y1="${yScalePct(0)}" y2="${yScalePct(100)}" stroke="#00d4aa" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.8"/>
+    <line x1="${xScale(DEPART_SEC)}" x2="${xScale(planEndSec)}" y1="${yScalePct(0)}" y2="${yScalePct(100)}" stroke="#00d4aa" stroke-width="1.5" stroke-dasharray="6 4" opacity="0.8"/>
   `;
 
   // Ligne de départ verticale (repère visuel)
