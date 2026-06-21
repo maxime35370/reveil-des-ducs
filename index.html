@@ -516,7 +516,17 @@
     }
     #visibility-overlay.active { display: flex; }
     #visibility-overlay.mode-banner { background: #000; }
-    .visibility-banner-text {
+    /* Carrousel continu (marquee) : on duplique le contenu en deux moitiés
+       identiques côte à côte, on translate de -50% (= une moitié pile), et
+       quand l'animation reboucle elle reprend pile au même rendu visuel.
+       Aucun gap entre cycles, défilement perpétuel sans interruption. */
+    .visibility-banner-track {
+      display: flex;
+      width: max-content;
+      animation: vis-scroll 4s linear infinite;
+      will-change: transform;
+    }
+    .visibility-banner-half {
       white-space: nowrap;
       font-size: 35vh;
       line-height: 1;
@@ -524,12 +534,11 @@
       font-weight: 900;
       font-family: var(--display);
       letter-spacing: 0.04em;
-      animation: vis-scroll 4s linear infinite;
-      will-change: transform;
+      flex-shrink: 0;
     }
     @keyframes vis-scroll {
-      from { transform: translateX(100vw); }
-      to   { transform: translateX(-100%); }
+      from { transform: translateX(0); }
+      to   { transform: translateX(-50%); }
     }
     /* Sélecteur de vitesse de défilement (visible en mode banner) */
     .visibility-speed-row {
@@ -3501,8 +3510,21 @@ async function startVisibility() {
   overlay.classList.remove('mode-white', 'mode-banner');
   overlay.classList.add('mode-' + mode);
   if (mode === 'banner') {
+    // Marquee : on construit chaque « moitié » du carrousel avec assez de
+    // répétitions pour couvrir au moins 1,5 viewport, puis on duplique
+    // cette moitié à l'identique pour que la translation -50% reboucle
+    // sans transition visible.
+    const escaped = escapeHtmlSafe(text);
+    const sep = '  •  ';
+    const estCharVw = 18;                                 // ≈ 18 vw/char à 35vh
+    const targetVw  = 180;                                // moitié ≥ 1,8 viewport
+    const repeats   = Math.max(3, Math.ceil(targetVw / Math.max(1, text.length * estCharVw)));
+    const half      = (escaped + sep).repeat(repeats);
     overlay.innerHTML = `
-      <div class="visibility-banner-text" style="animation-duration:${durationSec}s">${escapeHtmlSafe(text)} &nbsp;·&nbsp; ${escapeHtmlSafe(text)}</div>
+      <div class="visibility-banner-track" style="animation-duration:${durationSec}s">
+        <div class="visibility-banner-half">${half}</div>
+        <div class="visibility-banner-half">${half}</div>
+      </div>
       <button class="visibility-exit" onclick="event.stopPropagation(); stopVisibility()">✕ Sortir</button>
     `;
   } else {
