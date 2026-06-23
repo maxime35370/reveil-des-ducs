@@ -699,22 +699,37 @@
     }
     .point-popup .pp-hint { margin-top: 6px; font-size: 0.6rem; color: #888; text-align: center; }
 
-    /* Marqueur position estimée live — pastille cyan animée */
+    /* Marqueurs position estimée live (deux variantes) :
+       - recent (cyan) : projection à l'allure des 5 derniers km
+       - overall (or)  : projection à l'allure moyenne depuis le départ
+       Affichés ensemble dès qu'on a 2+ passages, ce qui donne une
+       fourchette visuelle entre « tendance actuelle » et « rythme moyen ». */
     .reveil-live-est-icon .live-est-dot {
       border-radius: 50%;
-      background: #00e5ff;
       border: 2px solid #fff;
-      box-shadow: 0 0 0 2px rgba(0, 229, 255, 0.4), 0 0 0 8px rgba(0, 229, 255, 0.15);
       display: flex;
       align-items: center;
       justify-content: center;
       font-size: 12px;
       box-sizing: border-box;
-      animation: live-est-pulse 1.2s ease-in-out infinite;
     }
-    @keyframes live-est-pulse {
+    .reveil-live-est-icon.recent .live-est-dot {
+      background: #00e5ff;
+      box-shadow: 0 0 0 2px rgba(0, 229, 255, 0.4), 0 0 0 8px rgba(0, 229, 255, 0.15);
+      animation: live-est-pulse-recent 1.2s ease-in-out infinite;
+    }
+    .reveil-live-est-icon.overall .live-est-dot {
+      background: #ffc107;
+      box-shadow: 0 0 0 2px rgba(255, 193, 7, 0.4), 0 0 0 8px rgba(255, 193, 7, 0.15);
+      animation: live-est-pulse-overall 1.6s ease-in-out infinite;
+    }
+    @keyframes live-est-pulse-recent {
       0%, 100% { box-shadow: 0 0 0 2px rgba(0, 229, 255, 0.45), 0 0 0 8px rgba(0, 229, 255, 0.15); }
       50%      { box-shadow: 0 0 0 4px rgba(0, 229, 255, 0.65), 0 0 0 16px rgba(0, 229, 255, 0.05); }
+    }
+    @keyframes live-est-pulse-overall {
+      0%, 100% { box-shadow: 0 0 0 2px rgba(255, 193, 7, 0.45), 0 0 0 8px rgba(255, 193, 7, 0.15); }
+      50%      { box-shadow: 0 0 0 4px rgba(255, 193, 7, 0.65), 0 0 0 16px rgba(255, 193, 7, 0.05); }
     }
 
     /* MODAL */
@@ -2065,8 +2080,11 @@ function nowSecOfDay() {
 // déjà l'allure des 5 derniers km). Les pauses futures avec km sont
 // respectées : tant que le coureur n'a pas atteint la fin de la pause, on
 // le fige sur le km du ravito.
-function estimateRunnerKm(nowSec) {
+function estimateRunnerKm(nowSec, paceOverride) {
   if (!Number.isFinite(nowSec) || nowSec < DEPART_SEC) return null;
+  const pace = (Number.isFinite(paceOverride) && paceOverride > 0)
+    ? paceOverride
+    : currentPace;
   const seen = Object.entries(seenPoints)
     .map(([k, v]) => ({ km: parseFloat(k), sec: v }))
     .filter(p => Number.isFinite(p.km) && Number.isFinite(p.sec))
@@ -2088,17 +2106,31 @@ function estimateRunnerKm(nowSec) {
 
   let curKm = refKm, curSec = refSec;
   for (const p of upcomingPauses) {
-    const arrival = curSec + (p.km - curKm) * currentPace;
+    const arrival = curSec + (p.km - curKm) * pace;
     if (nowSec < arrival) {
-      const kmCovered = (nowSec - curSec) / currentPace;
+      const kmCovered = (nowSec - curSec) / pace;
       return Math.min(curKm + kmCovered, TOTAL_KM);
     }
     const pauseEnd = Math.max(arrival, p.endSec);
     if (nowSec <= pauseEnd) return p.km;  // figé en ravito
     curKm = p.km; curSec = pauseEnd;
   }
-  const kmCovered = (nowSec - curSec) / currentPace;
+  const kmCovered = (nowSec - curSec) / pace;
   return Math.min(curKm + kmCovered, TOTAL_KM);
+}
+
+// Allure « moyenne depuis le départ » (hors pauses) basée sur le dernier
+// passage. Référence stable, à comparer avec recentRunningPace().
+function overallRunningPace() {
+  const seen = Object.entries(seenPoints)
+    .map(([k, v]) => ({ km: parseFloat(k), sec: v }))
+    .filter(p => Number.isFinite(p.km) && Number.isFinite(p.sec) && p.km > 0)
+    .sort((a, b) => a.km - b.km);
+  if (!seen.length) return null;
+  const last = seen[seen.length - 1];
+  const pausedSec = pauseTimeUpTo(last.sec);
+  const runningSec = Math.max(1, last.sec - DEPART_SEC - pausedSec);
+  return runningSec / last.km;
 }
 
 // Allure « récente » : créneau des derniers `windowKm` km terminés.
@@ -3187,68 +3219,104 @@ function initMap() {
   updatePauseMarkers();
 }
 
-// ─── MARQUEUR POSITION ESTIMÉE LIVE ──────────────────────
-// Affiche la position théorique du coureur sur le tracé, basée sur
-// currentPace (qui privilégie l'allure des 5 derniers km). Mis à jour
-// toutes les 10 sec tant que l'onglet carte est actif.
-let liveEstMarker = null;
-let liveEstTimer  = null;
+// ─── MARQUEURS POSITION ESTIMÉE LIVE ─────────────────────
+// Affiche jusqu'à DEUX positions théoriques sur le tracé pour donner
+// une fourchette visuelle :
+// - « recent » (cyan) : projection à l'allure des 5 derniers km
+//   → où il SERAIT s'il garde sa tendance actuelle
+// - « overall » (or)  : projection à l'allure moyenne depuis le départ
+//   → où il SERAIT s'il revient à son rythme moyen
+// L'écart entre les deux marqueurs traduit visuellement une accélération
+// ou un ralentissement par rapport à la moyenne.
+let liveEstMarkers = { recent: null, overall: null };
+let liveEstTimer   = null;
 
-function buildLiveEstIcon() {
+function buildLiveEstIcon(type) {
   const size = 22;
   const html = `<div class="live-est-dot" style="width:${size}px;height:${size}px;">🏃</div>`;
   return L.divIcon({
     html,
-    className: 'reveil-live-est-icon',
+    className: `reveil-live-est-icon ${type}`,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
     popupAnchor: [0, -size / 2]
   });
 }
 
-function buildLiveEstPopup(km, nowSec) {
-  const usingRecent = recentRunningPace(5) != null;
-  const paceLabel   = usingRecent ? "l'allure des 5 derniers km" : "l'allure moyenne";
-  const eta70 = estSec(TOTAL_KM);
+function buildLiveEstPopup(type, km, nowSec, pace) {
+  const label = type === 'recent'  ? '🏃 Tendance (5 derniers km)'
+                                   : '🏃 Moyenne depuis le départ';
+  const sub = type === 'recent'
+    ? 'Où il serait s\'il garde son allure actuelle.'
+    : 'Où il serait s\'il revient à son rythme moyen depuis le départ.';
   return `
     <div class="point-popup">
-      <div class="pp-title">🏃 Position estimée</div>
+      <div class="pp-title">${label}</div>
       <div class="pp-coords">~ km ${formatKm(km)} · ${secToHHMM(nowSec)}</div>
-      <div class="pp-coords" style="color:#666">Basée sur ${paceLabel} (${formatPace(currentPace)})</div>
-      <div class="pp-coords" style="color:#666">Arrivée projetée : ${secToHHMM(eta70)}</div>
-      <div class="pp-hint">Marqueur mis à jour toutes les 10 sec.</div>
+      <div class="pp-coords" style="color:#666">Allure utilisée : ${formatPace(pace)}</div>
+      <div class="pp-hint">${sub}</div>
     </div>
   `;
 }
 
+function placeLiveEstMarker(type, nowSec, pace) {
+  if (!leafletMap || !trace.length) return;
+  const km = estimateRunnerKm(nowSec, pace);
+  if (km == null) { removeLiveEstMarker(type); return; }
+  const pos = pointAtKm(km);
+  if (!pos) return;
+  let m = liveEstMarkers[type];
+  if (!m) {
+    m = L.marker([pos.lat, pos.lng], {
+      icon: buildLiveEstIcon(type),
+      zIndexOffset: type === 'recent' ? 2001 : 2000,
+      interactive: true
+    }).addTo(leafletMap);
+    m.bindPopup(() => {
+      const n = nowSecOfDay();
+      return buildLiveEstPopup(type, km, n, pace);
+    }, { minWidth: 220 });
+    liveEstMarkers[type] = m;
+  } else {
+    m.setLatLng([pos.lat, pos.lng]);
+    if (m.isPopupOpen()) m.setPopupContent(buildLiveEstPopup(type, km, nowSec, pace));
+  }
+}
+
+function removeLiveEstMarker(type) {
+  const m = liveEstMarkers[type];
+  if (m && leafletMap) leafletMap.removeLayer(m);
+  liveEstMarkers[type] = null;
+}
+
 function updateLiveEstimate() {
   if (!leafletMap || !trace.length) return;
-  // Course terminée → on cache l'estimation
+  // Course terminée → on cache toutes les estimations
   if (seenPoints[TOTAL_KM]) {
-    if (liveEstMarker) { leafletMap.removeLayer(liveEstMarker); liveEstMarker = null; }
+    removeLiveEstMarker('recent');
+    removeLiveEstMarker('overall');
     return;
   }
   const nowSec = nowSecOfDay();
-  const km = estimateRunnerKm(nowSec);
-  if (km == null) {
-    if (liveEstMarker) { leafletMap.removeLayer(liveEstMarker); liveEstMarker = null; }
+  if (nowSec == null) {
+    removeLiveEstMarker('recent');
+    removeLiveEstMarker('overall');
     return;
   }
-  const pos = pointAtKm(km);
-  if (!pos) return;
-  if (!liveEstMarker) {
-    liveEstMarker = L.marker([pos.lat, pos.lng], {
-      icon: buildLiveEstIcon(),
-      zIndexOffset: 2000,
-      interactive: true
-    }).addTo(leafletMap);
-    liveEstMarker.bindPopup(() => buildLiveEstPopup(estimateRunnerKm(nowSecOfDay()) || 0, nowSecOfDay()), { minWidth: 200 });
-  } else {
-    liveEstMarker.setLatLng([pos.lat, pos.lng]);
-    if (liveEstMarker.isPopupOpen()) {
-      liveEstMarker.setPopupContent(buildLiveEstPopup(km, nowSec));
-    }
-  }
+
+  const overall = overallRunningPace();
+  const recent  = recentRunningPace(5);
+
+  // « Overall » s'affiche dès qu'on a au moins 1 passage.
+  if (overall != null) placeLiveEstMarker('overall', nowSec, overall);
+  else                 removeLiveEstMarker('overall');
+
+  // « Recent » s'affiche avec 2+ passages. Sinon, sans aucun passage,
+  // on garde au moins un marqueur (en cyan) basé sur BASE_PACE pour
+  // signaler où le coureur DEVRAIT être à allure objectif.
+  if (recent != null)        placeLiveEstMarker('recent', nowSec, recent);
+  else if (overall == null)  placeLiveEstMarker('recent', nowSec, BASE_PACE);
+  else                       removeLiveEstMarker('recent');
 }
 
 function startLiveEstimate() {
@@ -3260,8 +3328,8 @@ function startLiveEstimate() {
 
 function stopLiveEstimate() {
   if (liveEstTimer) { clearInterval(liveEstTimer); liveEstTimer = null; }
-  if (liveEstMarker && leafletMap) { leafletMap.removeLayer(liveEstMarker); }
-  liveEstMarker = null;
+  removeLiveEstMarker('recent');
+  removeLiveEstMarker('overall');
 }
 
 // ─── MARQUEURS AD-HOC (live timing) ──────────────────────
