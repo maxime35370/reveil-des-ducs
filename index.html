@@ -1622,15 +1622,24 @@ let   DEPART_SEC         = DEFAULT_DEPART_SEC;  // ajustable (vagues toutes les 
 // Date du départ effectif. Permet de distinguer une session de test
 // (avant ou après le jour J) d'une utilisation en course réelle.
 const RACE_DATE_STR = '2026-06-27';
-// Mode test : `?test=1` dans l'URL bypass la garde de date pour pouvoir
-// vérifier les features live (marqueurs sur la carte, statut copié,
-// etc.) en dehors du jour J. Pour que les projections soient cohérentes,
-// pense aussi à régler une heure de départ proche de l'instant courant
-// dans ⚙️ Plan pendant le test.
+// Mode test : `?test=1` dans l'URL bypass la garde de date ET simule
+// une horloge virtuelle qui démarre quelques minutes après DEPART_SEC.
+// Le marqueur live et toutes les fonctions « now » utilisent ce temps
+// simulé qui progresse en temps réel → on peut voir le coureur avancer
+// sur la carte sans avoir à modifier l'heure de départ partagée.
+// L'offset peut être réglé via `?test=1&offset=N` (N en minutes, défaut 60).
 const TEST_MODE = (() => {
   try { return new URLSearchParams(location.search).has('test'); }
   catch (e) { return false; }
 })();
+const TEST_MODE_OFFSET_SEC = (() => {
+  if (!TEST_MODE) return 0;
+  try {
+    const v = parseInt(new URLSearchParams(location.search).get('offset') || '60', 10);
+    return Number.isFinite(v) && v > 0 ? v * 60 : 60 * 60;
+  } catch (e) { return 60 * 60; }
+})();
+const TEST_MODE_PAGE_LOAD_MS = Date.now();
 function raceStartMs() {
   const [y, m, d] = RACE_DATE_STR.split('-').map(Number);
   const dt = new Date(y, m - 1, d, 0, 0, 0);
@@ -2078,7 +2087,14 @@ function estSec(km) {
 // Renvoie null si on est hors de la fenêtre de course (test J-X) : les
 // fonctions « live » qui en dépendent doivent gérer ce cas explicitement
 // pour ne pas projeter des km bidons.
+// En mode test : renvoie une horloge virtuelle (DEPART + offset + elapsed)
+// qui progresse en temps réel → permet de tester les features live sans
+// modifier l'heure de départ partagée.
 function nowSecOfDay() {
+  if (TEST_MODE) {
+    const elapsedSec = (Date.now() - TEST_MODE_PAGE_LOAD_MS) / 1000;
+    return DEPART_SEC + TEST_MODE_OFFSET_SEC + elapsedSec;
+  }
   if (!isRaceTime()) return null;
   const d = new Date();
   let sec = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
@@ -3794,8 +3810,7 @@ function showTestModeBadge() {
   if (document.getElementById('test-mode-badge')) return;
   const el = document.createElement('div');
   el.id = 'test-mode-badge';
-  el.textContent = '🧪 TEST MODE';
-  el.title = 'Garde de date bypassée — retire ?test=1 de l\'URL pour repasser en mode normal';
+  el.title = 'Mode test : horloge virtuelle. Retire ?test=1 de l\'URL pour repasser en normal.';
   Object.assign(el.style, {
     position: 'fixed', bottom: '14px', left: '14px',
     background: 'rgba(255, 95, 95, 0.92)', color: '#fff',
@@ -3806,6 +3821,12 @@ function showTestModeBadge() {
     pointerEvents: 'auto', userSelect: 'none'
   });
   document.body.appendChild(el);
+  const refresh = () => {
+    const n = nowSecOfDay();
+    el.textContent = `🧪 TEST · ${secToHHMM(n)}`;
+  };
+  refresh();
+  setInterval(refresh, 5000);
 }
 
 async function bootstrap() {
