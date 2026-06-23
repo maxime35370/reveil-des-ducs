@@ -153,6 +153,7 @@
     body.is-readonly .btn-vu,
     body.is-readonly .btn-edit-pause,
     body.is-readonly .btn-delete-pause,
+    body.is-readonly .btn-edit-custom,
     body.is-readonly .btn-delete-custom,
     body.is-readonly .pp-delete,
     body.is-readonly .pp-btn:not(.pp-sv):not(.pp-sat):not(.pp-gm),
@@ -240,7 +241,7 @@
     .point-item.is-custom .km-badge {
       color: #ff9400;
     }
-    .btn-delete-custom {
+    .btn-delete-custom, .btn-edit-custom {
       background: transparent;
       color: var(--muted);
       border: 1px solid var(--border);
@@ -249,7 +250,9 @@
       cursor: pointer;
       font-size: 0.8rem;
     }
+    .btn-edit-custom { margin-right: 6px; }
     .btn-delete-custom:active { background: var(--border); color: var(--danger); }
+    .btn-edit-custom:active   { background: var(--border); color: var(--accent2); }
 
     /* SYNC INDICATOR */
     .sync-dot {
@@ -2583,7 +2586,7 @@ function renderList() {
     let actionBtn;
     if (isCustom) {
       actionBtn = isMyPassage
-        ? `<button class="btn-delete-custom" onclick="deletePassage(${point.km})" title="Supprimer ce passage">✕</button>`
+        ? `<button class="btn-edit-custom" onclick="openModal(${point.km})" title="Modifier l'heure">✏️</button><button class="btn-delete-custom" onclick="deletePassage(${point.km})" title="Supprimer ce passage">✕</button>`
         : '';
     } else if (isSeen) {
       actionBtn = isMyPassage
@@ -2693,13 +2696,19 @@ function confirmVu() {
   let sec = timeStrToSec(raw);
   if (!Number.isFinite(sec)) { alert('Heure invalide.'); return; }
   if (sec < DEPART_SEC - 3600) sec += 86400; // traversée minuit
+  // Préserve le flag « custom » si la modale est ouverte pour éditer
+  // un passage live timing (sinon on le rétrogradait en checkpoint).
+  const wasCustom = customKm.has(pendingKm);
   seenPoints[pendingKm] = sec;
   saveSeenPoints();
-  writePassageToFirestore(pendingKm, sec, false);
+  writePassageToFirestore(pendingKm, sec, wasCustom);
   recalibrate();
   closeModal();
   renderList();
-  if (leafletMap) updateMapMarkers();
+  if (leafletMap) {
+    updateMapMarkers();
+    if (wasCustom) refreshCustomMarker(pendingKm);
+  }
   if (document.getElementById('tab-chart')?.classList.contains('active')) renderChart();
 }
 
