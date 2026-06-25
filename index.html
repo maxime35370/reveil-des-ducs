@@ -3766,6 +3766,23 @@ function renderSegmentColors() {
   const paces = refSegs.map(s => s.pace);
   const minPace = Math.min(...paces);
   const maxPace = Math.max(...paces);
+  // Debug : log dans la console les secteurs triés du plus rapide au plus
+  // lent (pour identifier visuellement les outliers qui faussent l'échelle).
+  // Les secteurs hors échelle (filtrés du min/max) sont marqués « court ».
+  try {
+    const sorted = [...segments].sort((a, b) => a.pace - b.pace);
+    const tbl = sorted.map(s => ({
+      'Secteur (km)': `${formatKm(s.kmStart)} → ${formatKm(s.kmEnd)}`,
+      'Distance (km)': +(s.kmEnd - s.kmStart).toFixed(3),
+      'Allure': formatPace(s.pace),
+      'Allure (sec/km)': +s.pace.toFixed(1),
+      'Compte échelle ?': (s.kmEnd - s.kmStart) >= SIGNIFICANT_KM ? '✓' : 'court (< 0,5 km)'
+    }));
+    console.log('🏃 Secteurs triés du plus rapide au plus lent :');
+    console.table(tbl);
+    console.log(`Échelle de couleur : min ${formatPace(minPace)} → max ${formatPace(maxPace)} `
+      + `(basée sur ${refSegs.length}/${segments.length} secteurs)`);
+  } catch (e) { /* console pas dispo, on s'en fiche */ }
   for (const seg of segments) {
     const pts = tracePointsBetweenKm(seg.kmStart, seg.kmEnd);
     if (pts.length < 2) continue;
