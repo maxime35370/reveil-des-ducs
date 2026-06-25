@@ -1055,11 +1055,12 @@
     <div class="modal-hint" id="settings-summary">⏱️ —</div>
     <div class="modal-hint" style="margin-top:8px;color:var(--muted)">💡 Le rythme de course sera déduit automatiquement. L'arrivée affichée se décalera ensuite en ajoutant le temps des pauses réellement prises.</div>
 
-    <div class="modal-label" style="margin-top:18px">Numéro de dossard (optionnel) :</div>
-    <input type="text" class="modal-time-input" id="settings-bib" placeholder="ex: 1234" maxlength="10" style="font-size:1.2rem"/>
-    <div class="modal-label" style="margin-top:14px">Lien Livetrail du coureur (optionnel) :</div>
-    <input type="url" class="modal-time-input" id="settings-livetrail" placeholder="https://livetrail.net/..." style="font-size:0.85rem"/>
-    <div class="modal-hint" style="margin-top:6px;color:var(--muted)">💡 Va sur Livetrail, cherche ton coureur, copie l'URL de sa fiche. Le dossard et ce lien apparaîtront dans le message « 📋 Copier statut » pour que les proches puissent suivre.</div>
+    <div class="modal-label" style="margin-top:18px">Numéro de dossard :</div>
+    <input type="text" class="modal-time-input" id="settings-bib" placeholder="ex: 6321" maxlength="10" style="font-size:1.2rem"/>
+    <div class="modal-hint" style="margin-top:6px;color:var(--muted)">💡 Le lien Livetrail du coureur sera construit automatiquement à partir du dossard et apparaîtra dans le message « 📋 Copier statut ».</div>
+    <div class="modal-label" style="margin-top:14px">Lien Livetrail personnalisé (optionnel) :</div>
+    <input type="url" class="modal-time-input" id="settings-livetrail" placeholder="(auto depuis le dossard si vide)" style="font-size:0.85rem"/>
+    <div class="modal-hint" style="margin-top:6px;color:var(--muted)">💡 À remplir uniquement si l'URL générée auto ne marche pas. Tu peux récupérer une URL alternative sur Livetrail et la coller ici.</div>
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeSettingsModal()">Annuler</button>
       <button class="btn-confirm" onclick="confirmSettings()">✓ Enregistrer</button>
@@ -1737,7 +1738,17 @@ let departureUpdatedAt = null;
 // Dossard et lien Livetrail du coureur. Partagés via Firestore avec
 // l'heure de départ, utilisés notamment dans le message « Copier statut ».
 let runnerBib       = '';
-let runnerLivetrail = '';
+let runnerLivetrail = '';   // override manuel ; sinon URL construite depuis le bib
+const LIVETRAIL_URL_TEMPLATE = 'https://ultramarin-breizhchrono.v3.livetrail.net/fr/2026/runners/{BIB}?raceId=Ducs';
+// URL effective à utiliser dans le message statut : override manuel si
+// renseigné, sinon URL auto-construite à partir du dossard.
+function effectiveLivetrailUrl() {
+  if (runnerLivetrail && runnerLivetrail.trim()) return runnerLivetrail.trim();
+  if (runnerBib && runnerBib.trim()) {
+    return LIVETRAIL_URL_TEMPLATE.replace('{BIB}', encodeURIComponent(runnerBib.trim()));
+  }
+  return '';
+}
 
 function recomputeBasePace() {
   BASE_PACE = (plannedArrivalSec - DEPART_SEC) / (POINTS[POINTS.length - 1].km);
@@ -2283,7 +2294,8 @@ function statusLinksLines() {
   try { appUrl = window.location.origin + window.location.pathname; }
   catch (e) { appUrl = ''; }
   if (appUrl) lines.push(`🔗 Suivi spectateur : ${appUrl}`);
-  if (runnerLivetrail) lines.push(`📊 Livetrail officiel : ${runnerLivetrail}`);
+  const ltUrl = effectiveLivetrailUrl();
+  if (ltUrl) lines.push(`📊 Livetrail officiel : ${ltUrl}`);
   return lines;
 }
 function buildStatusMessage() {
