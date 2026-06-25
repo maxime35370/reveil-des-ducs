@@ -442,7 +442,57 @@
     }
 
     /* MAP */
-    #map { width: 100%; flex: 1; }
+    #map { width: 100%; height: 100%; flex: 1; }
+
+    /* Légende secteurs : flotte en bas à gauche de la carte */
+    .segment-legend {
+      position: absolute;
+      bottom: 14px;
+      left: 14px;
+      z-index: 700;
+      background: rgba(17, 24, 34, 0.92);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      pointer-events: none;
+      max-width: 90vw;
+    }
+    .segment-legend .legend-title {
+      font-size: 0.7rem;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+    }
+    .segment-legend .legend-scale {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .segment-legend .legend-gradient {
+      width: 90px;
+      height: 10px;
+      border-radius: 5px;
+      background: linear-gradient(to right,
+        hsl(120, 75%, 45%) 0%,
+        hsl(60, 75%, 45%)  50%,
+        hsl(0, 75%, 45%)   100%);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    .segment-legend .legend-min,
+    .segment-legend .legend-max {
+      font-size: 0.68rem;
+      font-weight: 600;
+      min-width: 50px;
+      text-align: center;
+    }
+    .segment-legend .legend-min { color: hsl(120, 75%, 60%); }
+    .segment-legend .legend-max { color: hsl(0, 75%, 65%); }
 
     /* MAP TOOLBAR */
     .map-toolbar {
@@ -958,7 +1008,17 @@
     <button type="button" class="map-tool-btn" onclick="copyPointsSource()">📋 Export POINTS</button>
     <button type="button" class="map-tool-btn danger" onclick="resetPointPositions()">↺ Reset</button>
   </div>
-  <div id="map"></div>
+  <div style="position:relative;flex:1;">
+    <div id="map"></div>
+    <div id="segment-legend" class="segment-legend" style="display:none;">
+      <div class="legend-title">🏃 Allure par secteur</div>
+      <div class="legend-scale">
+        <span class="legend-min">—</span>
+        <div class="legend-gradient"></div>
+        <span class="legend-max">—</span>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -2238,6 +2298,7 @@ function recalibrate() {
     document.getElementById('est-arrival').textContent = `~${secToHHMM(pauseAdjustedPlan)}`;
     document.getElementById('pace-chip').textContent = formatPace(BASE_PACE);
     if (banner) { banner.classList.remove('show'); banner.innerHTML = ''; }
+    if (leafletMap) renderSegmentColors();
     return;
   }
   const [lastKm, lastSec] = seen[seen.length - 1];
@@ -2280,6 +2341,7 @@ function recalibrate() {
   // Chip header : on affiche l'allure moyenne (référence stable),
   // pas la projection courante qui peut être assez volatile.
   document.getElementById('pace-chip').textContent = formatPace(overallPace);
+  if (leafletMap) renderSegmentColors();
 }
 
 // ─── STATUT PARTAGEABLE (Whatsapp / SMS) ─────────────────
@@ -3305,6 +3367,8 @@ function initMap() {
   customKm.forEach(km => addCustomMarker(km));
   // Marqueurs des pauses ravito (avec km renseigné)
   updatePauseMarkers();
+  // Halo coloré par secteur (vitesse mesurée)
+  renderSegmentColors();
 }
 
 // ─── MARQUEURS POSITION ESTIMÉE LIVE ─────────────────────
@@ -3609,6 +3673,117 @@ function updateMapMarkers() {
     const m = mapMarkers[point.km];
     if (m) m.setIcon(buildPointIcon(point));
   });
+}
+
+// ─── SEGMENTS COLORÉS (vitesse par secteur) ──────────────
+// Affiche en arrière-plan du tracé bleu un halo coloré par secteur
+// mesuré : vert pour le secteur le plus rapide, rouge pour le plus
+// lent, dégradé pour les intermédiaires. S'active à partir de 2
+// segments mesurés (pour avoir min/max). Vitesse pure (hors pauses).
+let segmentLayers = [];
+
+function computeMeasuredSegments() {
+  const seen = Object.entries(seenPoints)
+    .map(([k, v]) => ({ km: parseFloat(k), sec: v }))
+    .filter(p => Number.isFinite(p.km) && Number.isFinite(p.sec) && p.km > 0)
+    .sort((a, b) => a.km - b.km);
+  if (seen.length < 2) return [];
+  const out = [];
+  // Secteur initial : départ → premier passage
+  const first = seen[0];
+  if (first.sec > DEPART_SEC && first.km > 0) {
+    const paused = pauseBetween(DEPART_SEC, first.sec);
+    const running = (first.sec - DEPART_SEC) - paused;
+    if (running > 0) out.push({ kmStart: 0, kmEnd: first.km, pace: running / first.km });
+  }
+  // Secteurs suivants : entre passages consécutifs
+  for (let i = 1; i < seen.length; i++) {
+    const a = seen[i - 1], b = seen[i];
+    const dKm = b.km - a.km;
+    const paused = pauseBetween(a.sec, b.sec);
+    const running = (b.sec - a.sec) - paused;
+    if (dKm > 0 && running > 0) out.push({ kmStart: a.km, kmEnd: b.km, pace: running / dKm });
+  }
+  return out;
+}
+
+function tracePointsBetweenKm(kmStart, kmEnd) {
+  if (!trace.length) return [];
+  // On garde les points dont cumKm est dans l'intervalle, plus on ajoute
+  // les bornes exactes pour que le segment se raccorde proprement.
+  const startPos = pointAtKm(kmStart);
+  const endPos   = pointAtKm(kmEnd);
+  const inner = trace.filter(p => p.cumKm > kmStart && p.cumKm < kmEnd);
+  const pts = [];
+  if (startPos) pts.push([startPos.lat, startPos.lng]);
+  for (const p of inner) pts.push([p.lat, p.lng]);
+  if (endPos) pts.push([endPos.lat, endPos.lng]);
+  return pts;
+}
+
+// Couleur HSL pour une allure donnée, sur l'échelle [min, max] des
+// secteurs mesurés. min (le plus rapide) = vert (120°), max (le plus
+// lent) = rouge (0°). Si min == max (un seul secteur) : jaune neutre.
+function paceColor(pace, minPace, maxPace) {
+  if (!Number.isFinite(pace) || !Number.isFinite(minPace) || !Number.isFinite(maxPace)) {
+    return 'hsl(60, 80%, 50%)';
+  }
+  if (maxPace <= minPace) return 'hsl(60, 80%, 50%)';
+  const ratio = Math.max(0, Math.min(1, (pace - minPace) / (maxPace - minPace)));
+  const hue = 120 * (1 - ratio);
+  return `hsl(${hue.toFixed(0)}, 75%, 45%)`;
+}
+
+function renderSegmentColors() {
+  if (!leafletMap) return;
+  // Nettoyer les anciens
+  for (const layer of segmentLayers) {
+    try { leafletMap.removeLayer(layer); } catch (e) {}
+  }
+  segmentLayers = [];
+  const segments = computeMeasuredSegments();
+  // Besoin d'au moins 2 secteurs pour définir min/max → sinon pas de couleurs.
+  if (segments.length < 2 || !trace.length) {
+    updateSegmentLegend(false);
+    return;
+  }
+  const paces = segments.map(s => s.pace);
+  const minPace = Math.min(...paces);
+  const maxPace = Math.max(...paces);
+  for (const seg of segments) {
+    const pts = tracePointsBetweenKm(seg.kmStart, seg.kmEnd);
+    if (pts.length < 2) continue;
+    const color = paceColor(seg.pace, minPace, maxPace);
+    const layer = L.polyline(pts, {
+      color,
+      weight: 10,
+      opacity: 0.85,
+      lineCap: 'round',
+      lineJoin: 'round',
+      interactive: true
+    }).addTo(leafletMap);
+    layer.bindPopup(`
+      <div class="point-popup">
+        <div class="pp-title">📊 Secteur km ${formatKm(seg.kmStart)} → km ${formatKm(seg.kmEnd)}</div>
+        <div class="pp-coords">Distance : ${formatKm(seg.kmEnd - seg.kmStart)} km</div>
+        <div class="pp-coords">Allure : <strong>${formatPace(seg.pace)}</strong></div>
+      </div>
+    `, { minWidth: 200 });
+    layer.bringToBack();
+    segmentLayers.push(layer);
+  }
+  // S'assurer que le tracé bleu reste au-dessus du halo coloré.
+  if (mapPolyline) mapPolyline.bringToFront();
+  updateSegmentLegend(true, minPace, maxPace);
+}
+
+function updateSegmentLegend(visible, minPace, maxPace) {
+  const el = document.getElementById('segment-legend');
+  if (!el) return;
+  if (!visible) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+  el.querySelector('.legend-min').textContent = formatPace(minPace);
+  el.querySelector('.legend-max').textContent = formatPace(maxPace);
 }
 
 // ─── OUTILS CARTE : partage / export / reset ────────────
