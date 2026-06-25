@@ -2923,7 +2923,7 @@ function applyPauseModalMode(isOfficial) {
     if (startLb) startLb.textContent = 'Heure d\'entrée (HH:MM, optionnelle) :';
     if (endLb)   endLb.textContent   = 'Heure de sortie (HH:MM, optionnelle) :';
     if (kmLb)    kmLb.textContent    = 'Kilomètre du ravito :';
-    if (hintEl)  hintEl.innerHTML    = '💡 Tu peux enregistrer un point officiel avec juste le km, et compléter les heures plus tard (depuis Livetrail). À l\'ajout de l\'heure d\'entrée, un passage est créé automatiquement pour affiner les projections.';
+    if (hintEl)  hintEl.innerHTML    = '💡 Tu peux enregistrer un point officiel avec juste le km, et compléter les heures plus tard (depuis Livetrail). Le ravito est traité comme une pause : sa durée est <strong>déduite</strong> des calculs d\'allure, et les heures de passage suivants sont décalées en conséquence.';
   } else {
     if (titleEl) titleEl.textContent = '⏸️ Pause';
     if (startLb) startLb.textContent = 'Heure d\'arrêt (HH:MM) :';
@@ -3028,19 +3028,13 @@ function confirmPause() {
   savePauses();
   writePauseToFirestore(pauses[pendingPauseId]);
 
-  // Ravito officiel + heure d'entrée renseignée → crée automatiquement un
-  // passage (custom) à ce km, sauf si un passage existe déjà à ce km.
-  if (isOfficial && Number.isFinite(startSec) && Number.isFinite(km)
-      && seenPoints[km] == null) {
-    seenPoints[km] = startSec;
-    customKm.add(km);
-    saveSeenPoints();
-    writePassageToFirestore(km, startSec, true);
-    if (leafletMap) {
-      updateMapMarkers();
-      refreshCustomMarker(km);
-    }
-  }
+  // Un ravito officiel EST une pause à un km connu : start = entrée,
+  // end = sortie. Pas besoin de créer un passage en plus à l'heure
+  // d'entrée — la projection des passages suivants intègre déjà la
+  // durée du ravito via estSec() (cf. filtre `p.km >= refKm`).
+  // Si l'utilisateur veut quand même marquer le passage à l'entrée
+  // de manière séparée (par ex. pour traquer une allure pure
+  // jusque-là), il peut le faire manuellement via « ➕ Passage live ».
 
   recalibrate();
   closePauseModal();
