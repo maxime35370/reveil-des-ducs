@@ -2162,8 +2162,11 @@ function estSec(km) {
   // (avec un km renseigné) qui se trouvent entre le dernier point vu et `km`.
   // Pour chaque pause traversée, le wall-clock saute à la fin de la pause si
   // le coureur arrive avant qu'elle ne se termine.
+  // `p.km >= refKm` (et pas seulement `> refKm`) pour qu'une pause AU même
+  // km que le dernier passage soit prise en compte — typique d'un ravito
+  // officiel dont l'entrée est saisie comme passage live.
   const onWay = Object.values(pauses)
-    .filter(p => Number.isFinite(p.km) && p.km > refKm && p.km <= km
+    .filter(p => Number.isFinite(p.km) && p.km >= refKm && p.km <= km
                   && Number.isFinite(p.startSec) && Number.isFinite(p.endSec))
     .sort((a, b) => a.km - b.km);
   let curKm = refKm, curSec = refSec;
@@ -2213,8 +2216,11 @@ function estimateRunnerKm(nowSec, paceOverride) {
     refKm = last.km; refSec = last.sec;
   }
 
+  // `p.km >= refKm` pour qu'une pause AU même km que le dernier passage
+  // soit prise en compte dans la projection live (cas du ravito officiel
+  // saisi à l'entrée).
   const upcomingPauses = Object.values(pauses)
-    .filter(p => Number.isFinite(p.km) && p.km > refKm
+    .filter(p => Number.isFinite(p.km) && p.km >= refKm
               && Number.isFinite(p.startSec) && Number.isFinite(p.endSec))
     .sort((a, b) => a.km - b.km);
 
