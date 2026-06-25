@@ -1054,6 +1054,13 @@
     <input type="time" class="modal-time-input" id="settings-arrival" oninput="updateSettingsSummary()"/>
     <div class="modal-hint" id="settings-summary">⏱️ —</div>
     <div class="modal-hint" style="margin-top:8px;color:var(--muted)">💡 Le rythme de course sera déduit automatiquement. L'arrivée affichée se décalera ensuite en ajoutant le temps des pauses réellement prises.</div>
+
+    <div class="modal-label" style="margin-top:18px">Numéro de dossard :</div>
+    <input type="text" class="modal-time-input" id="settings-bib" placeholder="ex: 6321" maxlength="10" style="font-size:1.2rem"/>
+    <div class="modal-hint" style="margin-top:6px;color:var(--muted)">💡 Le lien Livetrail du coureur sera construit automatiquement à partir du dossard et apparaîtra dans le message « 📋 Copier statut ».</div>
+    <div class="modal-label" style="margin-top:14px">Lien Livetrail personnalisé (optionnel) :</div>
+    <input type="url" class="modal-time-input" id="settings-livetrail" placeholder="(auto depuis le dossard si vide)" style="font-size:0.85rem"/>
+    <div class="modal-hint" style="margin-top:6px;color:var(--muted)">💡 À remplir uniquement si l'URL générée auto ne marche pas. Tu peux récupérer une URL alternative sur Livetrail et la coller ici.</div>
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeSettingsModal()">Annuler</button>
       <button class="btn-confirm" onclick="confirmSettings()">✓ Enregistrer</button>
@@ -1443,19 +1450,26 @@ async function clearAllPausesFirestore() {
 }
 
 // ─── PLAN PARTAGÉ (FIRESTORE) ───────────────────────────
-// Seule l'heure de départ effective est synchronisée — l'heure d'arrivée
-// reste un réglage perso de chaque spectateur.
-async function writeDepartureToFirestore(hhmm) {
+// Heure de départ effective + dossard + lien Livetrail sont synchronisés
+// entre spectateurs. L'heure d'arrivée reste un réglage perso.
+async function writePlanToFirestore({ hhmm, bib, livetrail } = {}) {
   if (!firestoreReady || !myUid) return;
   try {
-    await planRef.set({
-      departureHHMM: hhmm,
-      updatedBy:     myName || 'Anonyme',
-      updatedAt:     firebase.firestore.FieldValue.serverTimestamp()
-    }, { merge: true });
+    const payload = {
+      updatedBy: myName || 'Anonyme',
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
+    if (typeof hhmm      === 'string') payload.departureHHMM = hhmm;
+    if (typeof bib       === 'string') payload.bib           = bib;
+    if (typeof livetrail === 'string') payload.livetrail     = livetrail;
+    await planRef.set(payload, { merge: true });
   } catch (e) {
     console.warn('Erreur écriture plan Firestore :', e);
   }
+}
+// Compat : ancien helper qui n'écrivait que l'heure.
+function writeDepartureToFirestore(hhmm) {
+  return writePlanToFirestore({ hhmm });
 }
 
 let unsubPlan = null;
@@ -1463,11 +1477,19 @@ function startPlanListener() {
   if (unsubPlan) unsubPlan();
   unsubPlan = planRef.onSnapshot(doc => {
     const d = doc.data();
-    if (!d || typeof d.departureHHMM !== 'string'
-        || !/^\d{2}:\d{2}$/.test(d.departureHHMM)) return;
-    const newDepart = hhmmToSecOfDay(d.departureHHMM);
-    if (newDepart === DEPART_SEC) return;  // pas de changement → no-op
-    DEPART_SEC         = newDepart;
+    if (!d) return;
+    let changed = false;
+    if (typeof d.departureHHMM === 'string' && /^\d{2}:\d{2}$/.test(d.departureHHMM)) {
+      const newDepart = hhmmToSecOfDay(d.departureHHMM);
+      if (newDepart !== DEPART_SEC) { DEPART_SEC = newDepart; changed = true; }
+    }
+    if (typeof d.bib === 'string' && d.bib !== runnerBib) {
+      runnerBib = d.bib; changed = true;
+    }
+    if (typeof d.livetrail === 'string' && d.livetrail !== runnerLivetrail) {
+      runnerLivetrail = d.livetrail; changed = true;
+    }
+    if (!changed) return;
     recomputeBasePace();
     departureUpdatedBy = d.updatedBy || null;
     departureUpdatedAt = d.updatedAt || null;
@@ -1713,6 +1735,20 @@ let plannedArrivalSec  = DEFAULT_ARRIVAL;
 let BASE_PACE          = (plannedArrivalSec - DEPART_SEC) / (POINTS[POINTS.length - 1].km);
 let departureUpdatedBy = null;
 let departureUpdatedAt = null;
+// Dossard et lien Livetrail du coureur. Partagés via Firestore avec
+// l'heure de départ, utilisés notamment dans le message « Copier statut ».
+let runnerBib       = '';
+let runnerLivetrail = '';   // override manuel ; sinon URL construite depuis le bib
+const LIVETRAIL_URL_TEMPLATE = 'https://ultramarin-breizhchrono.v3.livetrail.net/fr/2026/runners/{BIB}?raceId=Ducs';
+// URL effective à utiliser dans le message statut : override manuel si
+// renseigné, sinon URL auto-construite à partir du dossard.
+function effectiveLivetrailUrl() {
+  if (runnerLivetrail && runnerLivetrail.trim()) return runnerLivetrail.trim();
+  if (runnerBib && runnerBib.trim()) {
+    return LIVETRAIL_URL_TEMPLATE.replace('{BIB}', encodeURIComponent(runnerBib.trim()));
+  }
+  return '';
+}
 
 function recomputeBasePace() {
   BASE_PACE = (plannedArrivalSec - DEPART_SEC) / (POINTS[POINTS.length - 1].km);
@@ -1729,6 +1765,8 @@ function loadPlan() {
     if (typeof p.arrivalHHMM === 'string' && /^\d{2}:\d{2}$/.test(p.arrivalHHMM)) {
       plannedArrivalSec = hhmmToAbsArrivalSec(p.arrivalHHMM);
     }
+    if (typeof p.bib === 'string')       runnerBib       = p.bib;
+    if (typeof p.livetrail === 'string') runnerLivetrail = p.livetrail;
     recomputeBasePace();
   } catch (e) {
     console.warn('Plan illisible', e);
@@ -1738,7 +1776,9 @@ function savePlan() {
   try {
     localStorage.setItem(PLAN_STORAGE_KEY, JSON.stringify({
       arrivalHHMM:   plannedArrivalHHMM(),
-      departureHHMM: departureHHMM()
+      departureHHMM: departureHHMM(),
+      bib:           runnerBib,
+      livetrail:     runnerLivetrail
     }));
   } catch (e) {
     console.warn('Plan non sauvegardé', e);
@@ -2246,6 +2286,18 @@ function recalibrate() {
 // Construit un message court résumant la situation courante :
 // position estimée, allure, ETA, avance/retard, pauses. Utilisé par
 // le bouton 📋 dans l'info-bar pour copier dans le presse-papier.
+function statusLinksLines() {
+  // Lignes ajoutées en fin de message pour permettre aux destinataires
+  // de suivre la course eux-mêmes : appli spectateur + Livetrail officiel.
+  const lines = [];
+  let appUrl = '';
+  try { appUrl = window.location.origin + window.location.pathname; }
+  catch (e) { appUrl = ''; }
+  if (appUrl) lines.push(`🔗 Suivi spectateur : ${appUrl}`);
+  const ltUrl = effectiveLivetrailUrl();
+  if (ltUrl) lines.push(`📊 Livetrail officiel : ${ltUrl}`);
+  return lines;
+}
 function buildStatusMessage() {
   const nowSec = nowSecOfDay();
   const seen = Object.entries(seenPoints)
@@ -2256,13 +2308,13 @@ function buildStatusMessage() {
   const lines = inRace
     ? ['🏃 Réveil des Ducs · suivi en direct']
     : ['🏃 Réveil des Ducs'];
+  if (runnerBib) lines.push(`🎽 Dossard #${runnerBib}`);
 
   if (seenPoints[TOTAL_KM]) {
     lines.push(`🏁 Arrivée à ${secToHHMM(seenPoints[TOTAL_KM])} (km ${formatKm(TOTAL_KM)})`);
-    return lines.join('\n');
+    return lines.concat(['', ...statusLinksLines()]).join('\n');
   }
   if (!inRace) {
-    // Hors fenêtre de course (J-X ou bien après l'arrivée non saisie)
     const msUntil = timeUntilRaceStartMs();
     if (msUntil > 0) {
       const days  = Math.floor(msUntil / (24 * 3600 * 1000));
@@ -2274,16 +2326,14 @@ function buildStatusMessage() {
     } else {
       lines.push('Course terminée (heure d\'arrivée non saisie)');
     }
-    return lines.join('\n');
+    return lines.concat(['', ...statusLinksLines()]).join('\n');
   }
   if (nowSec < DEPART_SEC) {
     const mins = Math.ceil((DEPART_SEC - nowSec) / 60);
     lines.push(`⏳ Départ dans ${mins} min (${secToHHMM(DEPART_SEC)})`);
-    return lines.join('\n');
+    return lines.concat(['', ...statusLinksLines()]).join('\n');
   }
 
-  // Position estimée à l'instant T (utilise currentPace, donc allure récente
-  // si dispo). On affiche aussi le dernier passage réel comme repère.
   const estKm = estimateRunnerKm(nowSec);
   if (estKm != null) {
     lines.push(`📍 ~km ${formatKm(estKm)} à ${secToHHMM(nowSec)}`);
@@ -2320,6 +2370,8 @@ function buildStatusMessage() {
     lines.push(`⏸️ ${completePauses.length} pause${completePauses.length > 1 ? 's' : ''} · ${totalMin} min cumulées`);
   }
 
+  const links = statusLinksLines();
+  if (links.length) lines.push('', ...links);
   return lines.join('\n');
 }
 async function copyStatus() {
@@ -2386,6 +2438,8 @@ function updatePlanDisplay() {
 function openSettingsModal() {
   document.getElementById('settings-departure').value = departureHHMM();
   document.getElementById('settings-arrival').value   = plannedArrivalHHMM();
+  document.getElementById('settings-bib').value       = runnerBib || '';
+  document.getElementById('settings-livetrail').value = runnerLivetrail || '';
   updateSettingsSummary();
   document.getElementById('modal-settings').classList.add('open');
 }
@@ -2423,10 +2477,14 @@ function updateSettingsSummary() {
 function confirmSettings() {
   const departure = document.getElementById('settings-departure').value;
   const arrival   = document.getElementById('settings-arrival').value;
+  const bibRaw    = document.getElementById('settings-bib').value.trim();
+  const ltRaw     = document.getElementById('settings-livetrail').value.trim();
   if (!departure || !/^\d{2}:\d{2}$/.test(departure)) { alert('Heure de départ invalide.'); return; }
   if (!arrival   || !/^\d{2}:\d{2}$/.test(arrival))   { alert('Heure d\'arrivée invalide.'); return; }
+  if (ltRaw && !/^https?:\/\//i.test(ltRaw)) {
+    alert('Lien Livetrail invalide (doit commencer par https://).'); return;
+  }
   const depSec = hhmmToSecOfDay(departure);
-  // Calcule l'arrivée par rapport au futur départ pour le check de validité.
   let arrSec = hhmmToSecOfDay(arrival);
   if (arrSec < depSec - 3600) arrSec += 86400;
   const totalSec = arrSec - depSec;
@@ -2434,11 +2492,21 @@ function confirmSettings() {
   const paceSec = totalSec / TOTAL_KM;
   if (paceSec < 60 || paceSec > 1800) { alert('Allure résultante hors plage (1\'00" à 30\'00" /km).'); return; }
   const departureChanged = depSec !== DEPART_SEC;
+  const bibChanged       = bibRaw !== runnerBib;
+  const livetrailChanged = ltRaw !== runnerLivetrail;
   DEPART_SEC        = depSec;
   plannedArrivalSec = arrSec;
   BASE_PACE         = paceSec;
+  runnerBib         = bibRaw;
+  runnerLivetrail   = ltRaw;
   savePlan();
-  if (departureChanged) writeDepartureToFirestore(departure);
+  if (departureChanged || bibChanged || livetrailChanged) {
+    writePlanToFirestore({
+      hhmm:      departureChanged ? departure : undefined,
+      bib:       bibChanged       ? bibRaw    : undefined,
+      livetrail: livetrailChanged ? ltRaw     : undefined
+    });
+  }
   updateHeaderDeparture();
   closeSettingsModal();
   recalibrate();
