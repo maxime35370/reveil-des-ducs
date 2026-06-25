@@ -2313,13 +2313,6 @@ function buildStatusMessage() {
   else                             deltaTxt = ` (${Math.round(delta / 60)} min de retard)`;
   lines.push(`🎯 Arrivée Port de Vannes ~${secToHHMM(finishSec)}${deltaTxt}`);
 
-  const completePauses = Object.values(pauses)
-    .filter(p => Number.isFinite(p.startSec) && Number.isFinite(p.endSec));
-  if (completePauses.length) {
-    const totalMin = Math.round(completePauses.reduce((s, p) => s + (p.endSec - p.startSec), 0) / 60);
-    lines.push(`⏸️ ${completePauses.length} pause${completePauses.length > 1 ? 's' : ''} · ${totalMin} min cumulées`);
-  }
-
   return lines.join('\n');
 }
 async function copyStatus() {
