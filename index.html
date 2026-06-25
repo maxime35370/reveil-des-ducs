@@ -3677,26 +3677,40 @@ function updateMapMarkers() {
 let segmentLayers = [];
 
 function computeMeasuredSegments() {
-  const seen = Object.entries(seenPoints)
-    .map(([k, v]) => ({ km: parseFloat(k), sec: v }))
-    .filter(p => Number.isFinite(p.km) && Number.isFinite(p.sec) && p.km > 0)
-    .sort((a, b) => a.km - b.km);
-  if (seen.length < 2) return [];
+  // Construit une liste de points-frontières (km, sec) à partir de :
+  // - DEPART_SEC à km 0
+  // - chaque passage saisi
+  // - chaque ravito officiel complet → DEUX frontières au même km :
+  //   l'entrée et la sortie. Ainsi un ravito coupe naturellement ce
+  //   qui aurait été un secteur en deux : avant-ravito (course) et
+  //   après-ravito (course), avec un creux non-coloré pour le ravito
+  //   lui-même (déplacement nul).
+  const boundaries = [{ km: 0, sec: DEPART_SEC }];
+  Object.entries(seenPoints).forEach(([k, v]) => {
+    const km = parseFloat(k);
+    if (Number.isFinite(km) && Number.isFinite(v) && km > 0) {
+      boundaries.push({ km, sec: v });
+    }
+  });
+  Object.values(pauses).forEach(p => {
+    if (!Number.isFinite(p.km) || p.km <= 0) return;
+    if (!Number.isFinite(p.startSec) || !Number.isFinite(p.endSec)) return;
+    boundaries.push({ km: p.km, sec: p.startSec });
+    boundaries.push({ km: p.km, sec: p.endSec });
+  });
+  boundaries.sort((a, b) => a.km !== b.km ? a.km - b.km : a.sec - b.sec);
+
   const out = [];
-  // Secteur initial : départ → premier passage
-  const first = seen[0];
-  if (first.sec > DEPART_SEC && first.km > 0) {
-    const paused = pauseBetween(DEPART_SEC, first.sec);
-    const running = (first.sec - DEPART_SEC) - paused;
-    if (running > 0) out.push({ kmStart: 0, kmEnd: first.km, pace: running / first.km });
-  }
-  // Secteurs suivants : entre passages consécutifs
-  for (let i = 1; i < seen.length; i++) {
-    const a = seen[i - 1], b = seen[i];
+  for (let i = 1; i < boundaries.length; i++) {
+    const a = boundaries[i - 1];
+    const b = boundaries[i];
     const dKm = b.km - a.km;
+    if (dKm <= 0) continue;   // même km : pause au ravito, pas de secteur
+    const dSec = b.sec - a.sec;
+    if (dSec <= 0) continue;  // données incohérentes
     const paused = pauseBetween(a.sec, b.sec);
-    const running = (b.sec - a.sec) - paused;
-    if (dKm > 0 && running > 0) out.push({ kmStart: a.km, kmEnd: b.km, pace: running / dKm });
+    const running = dSec - paused;
+    if (running > 0) out.push({ kmStart: a.km, kmEnd: b.km, pace: running / dKm });
   }
   return out;
 }
