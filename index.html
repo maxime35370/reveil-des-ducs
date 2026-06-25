@@ -3755,7 +3755,15 @@ function renderSegmentColors() {
     updateSegmentLegend(false);
     return;
   }
-  const paces = segments.map(s => s.pace);
+  // Pour l'échelle min/max : ignorer les très petits secteurs (< 0,5 km).
+  // Exemple typique : la sous-section « passage juste avant le ravito »
+  // (200-300 m) dont l'allure est très sensible aux erreurs de mesure
+  // et écraserait l'échelle de couleur des autres secteurs.
+  // Si on a moins de 2 secteurs « significatifs », on retombe sur tous.
+  const SIGNIFICANT_KM = 0.5;
+  const significant = segments.filter(s => (s.kmEnd - s.kmStart) >= SIGNIFICANT_KM);
+  const refSegs = significant.length >= 2 ? significant : segments;
+  const paces = refSegs.map(s => s.pace);
   const minPace = Math.min(...paces);
   const maxPace = Math.max(...paces);
   for (const seg of segments) {
