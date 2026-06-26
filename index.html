@@ -1972,13 +1972,45 @@ function updateProgressBar() {
   kmEl.textContent  = `km ${formatKm(lastKm)} / ${formatKm(TOTAL_KM)}`;
 }
 
+// Cadence adaptative pour les rafraîchissements live (header chrono +
+// marqueur 🏃 carte). Le calcul est local, pas de data mobile consommée,
+// mais on ralentit quand même quand il ne se passe rien pour économiser
+// la batterie et le CPU. Inversement, on accélère quand le coureur
+// approche d'un checkpoint pour ne pas le manquer.
+function pickRefreshIntervalMs() {
+  // Hors course (avant départ, après arrivée saisie, hors fenêtre) →
+  // refresh lent : juste pour le countdown ou les changements de plan.
+  const nowSec = nowSecOfDay();
+  if (nowSec == null)               return 60 * 1000;
+  if (seenPoints[TOTAL_KM])         return 60 * 1000;
+  if (nowSec < DEPART_SEC)          return 30 * 1000;
+  // Temps avant le prochain checkpoint non vu → cadence adaptée.
+  const checkpoints = POINTS.filter(p => !p.start && !p.finish);
+  const seenKmList = Object.keys(seenPoints).map(parseFloat);
+  const maxSeenKm  = seenKmList.length ? Math.max(...seenKmList) : -1;
+  const next = checkpoints.find(p => p.km > maxSeenKm && !seenPoints[p.km]);
+  if (!next) return 30 * 1000;
+  const etaSec = estSec(next.km) - nowSec;
+  if (etaSec <= 30)        return 1000;        // < 30s : passage imminent
+  if (etaSec <= 60)        return 5  * 1000;   // 30 s → 1 min
+  if (etaSec <= 2  * 60)   return 10 * 1000;   // 1 → 2 min
+  if (etaSec <= 5  * 60)   return 15 * 1000;   // 2 → 5 min
+  if (etaSec <= 10 * 60)   return 30 * 1000;   // 5 → 10 min
+  if (etaSec <= 30 * 60)   return 45 * 1000;   // 10 → 30 min
+  return 60 * 1000;                             // > 30 min
+}
+
 let headerLiveTimer = null;
+function scheduleHeaderLiveTick() {
+  headerLiveTimer = setTimeout(() => {
+    updateHeaderLiveInfo();
+    scheduleHeaderLiveTick();
+  }, pickRefreshIntervalMs());
+}
 function startHeaderLiveTicker() {
   if (headerLiveTimer) return;
   updateHeaderLiveInfo();
-  // Rafraîchissement chaque seconde pour le côté chronomètre. Coût
-  // négligeable (juste un innerHTML).
-  headerLiveTimer = setInterval(updateHeaderLiveInfo, 1000);
+  scheduleHeaderLiveTick();
 }
 // Somme des pauses déjà enregistrées (passées + futures), pour décaler
 // l'arrivée affichée et comparer au plan « sans pauses ».
@@ -3576,15 +3608,21 @@ function updateLiveEstimate() {
   else                       removeLiveEstMarker('recent');
 }
 
+function scheduleLiveEstimateTick() {
+  liveEstTimer = setTimeout(() => {
+    updateLiveEstimate();
+    scheduleLiveEstimateTick();
+  }, pickRefreshIntervalMs());
+}
 function startLiveEstimate() {
   if (!leafletMap) return;
   updateLiveEstimate();
-  if (liveEstTimer) clearInterval(liveEstTimer);
-  liveEstTimer = setInterval(updateLiveEstimate, 10000);
+  if (liveEstTimer) { clearTimeout(liveEstTimer); liveEstTimer = null; }
+  scheduleLiveEstimateTick();
 }
 
 function stopLiveEstimate() {
-  if (liveEstTimer) { clearInterval(liveEstTimer); liveEstTimer = null; }
+  if (liveEstTimer) { clearTimeout(liveEstTimer); liveEstTimer = null; }
   removeLiveEstMarker('recent');
   removeLiveEstMarker('overall');
 }
