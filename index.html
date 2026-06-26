@@ -146,6 +146,36 @@
     }
     .readonly-toggle-btn:active { transform: scale(0.96); }
 
+    /* Barre d'avancement entre l'info-bar et la barre d'actions.
+       Pourcentage basé sur le dernier passage saisi (référence stable). */
+    .progress-bar-wrapper {
+      background: var(--surface);
+      padding: 8px 14px 10px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .progress-bar {
+      height: 8px;
+      background: var(--surface2);
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      transition: width 0.5s ease;
+      border-radius: 4px;
+    }
+    .progress-bar-label {
+      font-size: 0.65rem;
+      color: var(--muted);
+      margin-top: 4px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .progress-bar-label b { color: var(--accent); }
+
     /* Mode lecture seule : on cache toutes les affordances d'édition.
        Les boutons de consultation (📋 statut, 📢 se faire voir) restent
        accessibles puisqu'ils n'altèrent pas les données partagées. */
@@ -951,7 +981,7 @@
   <div class="header-icon">🏃</div>
   <div class="header-text">
     <div class="header-title">RÉVEIL DES DUCS — SUIVI</div>
-    <div class="header-sub">27 juin 2026 · Départ <span id="header-departure">23h00</span> · Suscinio → Vannes</div>
+    <div class="header-sub" id="header-sub">27 juin 2026 · Départ <span id="header-departure">23h00</span> · Suscinio → Vannes</div>
   </div>
   <button type="button" class="header-visibility-btn" onclick="openVisibilityModal()" title="Se faire voir par le coureur">📢</button>
   <div class="pace-chip" id="pace-chip">9'26"/km</div>
@@ -975,6 +1005,15 @@
   <div class="info-bar">
     <div>Objectif <b id="plan-target">70 km en 11h</b> · Arrivée <b id="est-arrival">~10h00</b><button type="button" class="copy-status-btn" onclick="copyStatus()" title="Copier le statut pour le partager">📋</button><button type="button" class="readonly-toggle-btn" id="readonly-toggle-btn" onclick="toggleReadOnly()" title="Activer/désactiver le mode lecture seule">👁️</button></div>
     <div id="next-label" style="color:var(--accent2)"></div>
+  </div>
+  <div class="progress-bar-wrapper">
+    <div class="progress-bar">
+      <div class="progress-bar-fill" id="progress-bar-fill" style="width:0%"></div>
+    </div>
+    <div class="progress-bar-label">
+      <span><b id="progress-percent">0%</b> de la course</span>
+      <span id="progress-km">km 0 / —</span>
+    </div>
   </div>
   <div class="list-actions">
     <button type="button" class="list-action-btn" onclick="openCustomModal()">➕ Passage (live)</button>
@@ -1868,8 +1907,78 @@ function plannedArrivalHHMM() {
 function plannedTotalSec()  { return plannedArrivalSec - DEPART_SEC; }
 // Texte du header (« Départ 23h00 ») resynchronisé à chaque changement.
 function updateHeaderDeparture() {
+  // En mode course active, le sous-titre est piloté par updateHeaderLiveInfo
+  // qui se rafraîchit chaque seconde. On ne touche pas pendant ce temps-là.
+  const sub = document.getElementById('header-sub');
+  if (sub && sub.dataset.live === '1') return;
   const el = document.getElementById('header-departure');
   if (el) el.textContent = departureHHMM().replace(':', 'h');
+}
+
+// Formate une durée en secondes vers « 3h28 » ou « 47 min ».
+function formatDuration(sec) {
+  if (!Number.isFinite(sec) || sec <= 0) return '0 min';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (h === 0) return `${m} min`;
+  if (m === 0) return `${h}h`;
+  return `${h}h${String(m).padStart(2, '0')}`;
+}
+
+// Sous-titre header dynamique : chronomètre live + countdown arrivée.
+// Trois états : avant course (info statique), pendant course, après arrivée.
+function updateHeaderLiveInfo() {
+  const sub = document.getElementById('header-sub');
+  if (!sub) return;
+  const nowSec = nowSecOfDay();
+  // Course terminée (arrivée saisie)
+  if (seenPoints[TOTAL_KM]) {
+    const totalSec = seenPoints[TOTAL_KM] - DEPART_SEC;
+    sub.dataset.live = '1';
+    sub.innerHTML = `🏁 Terminé en <strong>${formatDuration(totalSec)}</strong>`;
+    return;
+  }
+  // Hors fenêtre de course ou avant départ → sous-titre statique
+  if (nowSec == null || nowSec < DEPART_SEC) {
+    sub.dataset.live = '0';
+    sub.innerHTML = `27 juin 2026 · Départ <span id="header-departure">${departureHHMM().replace(':', 'h')}</span> · Suscinio → Vannes`;
+    return;
+  }
+  // Pendant la course
+  const elapsed = nowSec - DEPART_SEC;
+  const finishSec = estSec(TOTAL_KM);
+  const remaining = Math.max(0, finishSec - nowSec);
+  sub.dataset.live = '1';
+  sub.innerHTML = `⏱️ <strong>${formatDuration(elapsed)}</strong> écoulé · 🎯 Arrivée dans <strong>${formatDuration(remaining)}</strong>`;
+}
+
+// Barre d'avancement sous l'info-bar. % basé sur le dernier passage saisi
+// pour la stabilité (la position estimée live reste sur le marqueur 🏃).
+function updateProgressBar() {
+  const fillEl = document.getElementById('progress-bar-fill');
+  const pctEl  = document.getElementById('progress-percent');
+  const kmEl   = document.getElementById('progress-km');
+  if (!fillEl || !pctEl || !kmEl) return;
+  let lastKm = 0;
+  const seen = Object.entries(seenPoints)
+    .map(([k, v]) => parseFloat(k))
+    .filter(km => Number.isFinite(km) && km > 0)
+    .sort((a, b) => a - b);
+  if (seen.length) lastKm = seen[seen.length - 1];
+  if (seenPoints[TOTAL_KM]) lastKm = TOTAL_KM;
+  const pct = Math.max(0, Math.min(100, 100 * lastKm / TOTAL_KM));
+  fillEl.style.width = pct.toFixed(1) + '%';
+  pctEl.textContent = pct.toFixed(0) + '%';
+  kmEl.textContent  = `km ${formatKm(lastKm)} / ${formatKm(TOTAL_KM)}`;
+}
+
+let headerLiveTimer = null;
+function startHeaderLiveTicker() {
+  if (headerLiveTimer) return;
+  updateHeaderLiveInfo();
+  // Rafraîchissement chaque seconde pour le côté chronomètre. Coût
+  // négligeable (juste un innerHTML).
+  headerLiveTimer = setInterval(updateHeaderLiveInfo, 1000);
 }
 // Somme des pauses déjà enregistrées (passées + futures), pour décaler
 // l'arrivée affichée et comparer au plan « sans pauses ».
@@ -2299,6 +2408,7 @@ function recalibrate() {
     document.getElementById('pace-chip').textContent = formatPace(BASE_PACE);
     if (banner) { banner.classList.remove('show'); banner.innerHTML = ''; }
     if (leafletMap) renderSegmentColors();
+    updateProgressBar();
     return;
   }
   const [lastKm, lastSec] = seen[seen.length - 1];
@@ -2342,6 +2452,7 @@ function recalibrate() {
   // pas la projection courante qui peut être assez volatile.
   document.getElementById('pace-chip').textContent = formatPace(overallPace);
   if (leafletMap) renderSegmentColors();
+  updateProgressBar();
 }
 
 // ─── STATUT PARTAGEABLE (Whatsapp / SMS) ─────────────────
@@ -4106,6 +4217,7 @@ async function bootstrap() {
   renderList();
   applyReadOnly();             // masque les affordances d'édition si actif
   showTestModeBadge();         // badge visible si on est en mode test
+  startHeaderLiveTicker();     // chrono live + countdown dans le sous-titre header
 
   // Firebase : auth anonyme + listener temps réel
   // Le listener onSnapshot reconstruira seenPoints depuis Firestore
